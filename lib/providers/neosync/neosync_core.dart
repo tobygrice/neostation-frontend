@@ -836,7 +836,10 @@ extension NeoSyncCore on NeoSyncProvider {
     );
   }
 
-  Future<List<LocalSaveFile>> _findGameSaveFiles(GameModel game) async {
+  Future<List<LocalSaveFile>> _findGameSaveFiles(
+    GameModel game, {
+    bool sharedMemoryCards = true,
+  }) async {
     try {
       // 1. Obtener el sistema para resolver sus rutas JSON
       final system = await _getSystemForGame(game);
@@ -889,7 +892,8 @@ extension NeoSyncCore on NeoSyncProvider {
 
       // Identificar si es un sistema de "memory cards compartidas"
       final isSharedSystem =
-          system.folderName == 'ps2' || system.folderName == 'dc';
+          sharedMemoryCards &&
+          (system.folderName == 'ps2' || system.folderName == 'dc');
 
       final statesPath = await _getRetroArchStatesPath();
       final savesPath = await _getRetroArchSavesPath();
@@ -999,8 +1003,15 @@ extension NeoSyncCore on NeoSyncProvider {
   /// Locates local save/state files for [game], reusing NeoSync's path
   /// resolution and filename matching. Each [LocalSaveFile.relativePath] is
   /// prefixed with `saves/` or `states/` so callers can tell them apart.
-  Future<List<LocalSaveFile>> locateGameSaveFiles(GameModel game) =>
-      _findGameSaveFiles(game);
+  ///
+  /// [sharedMemoryCards] false skips the PS2/Dreamcast rule that hands every
+  /// game the system's memory cards and nothing else, and matches by game
+  /// name there as everywhere. RomM, whose assets each belong to one ROM,
+  /// syncs no Shared Memory Card at all.
+  Future<List<LocalSaveFile>> locateGameSaveFiles(
+    GameModel game, {
+    bool sharedMemoryCards = true,
+  }) => _findGameSaveFiles(game, sharedMemoryCards: sharedMemoryCards);
 
   /// Resolves candidate local destination paths for a cloud file named
   /// [relativeName] (e.g. `saves/Game.srm` or `states/Game.state`) belonging to

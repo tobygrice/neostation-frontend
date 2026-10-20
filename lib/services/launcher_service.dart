@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
+import '../models/save_file_patterns.dart';
 import '../models/system_model.dart';
 import '../models/game_model.dart';
 import '../repositories/game_repository.dart';
@@ -93,6 +94,14 @@ class LauncherService {
       orElse: () => null,
     );
   }
+
+  /// Which of an emulator's files are Saves and which are Save States, from its
+  /// optional `save_files` entry. [SaveFilePatterns.none] when the system
+  /// config isn't loaded or the emulator declares nothing.
+  SaveFilePatterns getSaveFilePatterns(String systemId, String uniqueId) =>
+      SaveFilePatterns.fromJson(
+        getPlayerConfig(systemId, uniqueId)?['save_files'],
+      );
 
   /// Returns the Linux discovery hints for one emulator, or `null` when the
   /// system config isn't loaded or the emulator declares no Linux block.

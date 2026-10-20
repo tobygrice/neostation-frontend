@@ -24,9 +24,12 @@ import '../../widgets/custom_notification.dart';
 import '../../widgets/edge_fade.dart';
 import '../../widgets/romm_sync_banner.dart' show rommFormatBytes;
 import '../app_screen.dart';
+import '../neo_sync_screen/login_screen/custom_save_folders_view.dart';
 import 'romm_save_artwork.dart';
 
-enum _FocusArea { filters, games, files }
+/// Where the controller cursor is. [folders] is the Standalone Save Folders
+/// button at the end of the filter row.
+enum _FocusArea { filters, folders, games, files }
 
 /// The filter chips, in the order they are shown.
 enum _SaveFilter {
@@ -70,6 +73,8 @@ class _RommSavesContentState extends State<RommSavesContent> {
   String? _gameKey;
   // The focused file, which a refresh can move by listing newer files.
   ({bool isState, int id})? _fileKey;
+  // The Standalone Save Folders screen, shown in place of the saves.
+  bool _showFolders = false;
 
   // Input reads the games several times per press, so they are regrouped only
   // when the inventory or the filter changes.
@@ -161,6 +166,27 @@ class _RommSavesContentState extends State<RommSavesContent> {
     super.dispose();
   }
 
+  /// The filters and the Standalone Save Folders button beside them.
+  bool get _onTopRow =>
+      _focus == _FocusArea.filters || _focus == _FocusArea.folders;
+
+  /// Opens Standalone Save Folders here, under RomM, where there may be no
+  /// NeoSync account to reach it from. It registers its own navigation layer.
+  void _openFolders() => setState(() {
+    _focus = _FocusArea.folders;
+    _showFolders = true;
+  });
+
+  /// Back from Standalone Save Folders, with the cursor on the button that
+  /// opened it.
+  void _closeFolders() {
+    if (!mounted) return;
+    setState(() {
+      _showFolders = false;
+      _focus = _FocusArea.folders;
+    });
+  }
+
   void _back() {
     if (_focus == _FocusArea.files) {
       setState(() => _focus = _FocusArea.games);
@@ -180,7 +206,7 @@ class _RommSavesContentState extends State<RommSavesContent> {
     setState(() {
       _reconcileSelection(games);
       switch (_focus) {
-        case _FocusArea.filters:
+        case _FocusArea.filters || _FocusArea.folders:
           if (delta > 0 && games.isNotEmpty) _focus = _FocusArea.games;
         case _FocusArea.games:
           if (_gameIndex == 0 && delta < 0) {
@@ -214,8 +240,16 @@ class _RommSavesContentState extends State<RommSavesContent> {
       switch (_focus) {
         case _FocusArea.filters:
           final next = _filterFocus.index + delta;
-          _filterFocus =
-              _SaveFilter.values[next.clamp(0, _SaveFilter.values.length - 1)];
+          if (next >= _SaveFilter.values.length) {
+            _focus = _FocusArea.folders;
+          } else {
+            _filterFocus = _SaveFilter.values[math.max(0, next)];
+          }
+        case _FocusArea.folders:
+          if (delta < 0) {
+            _focus = _FocusArea.filters;
+            _filterFocus = _SaveFilter.values.last;
+          }
         case _FocusArea.games:
           if (delta > 0 && games.isNotEmpty) _focus = _FocusArea.files;
         case _FocusArea.files:
@@ -286,6 +320,10 @@ class _RommSavesContentState extends State<RommSavesContent> {
       _setFilter(_filterFocus);
       return;
     }
+    if (_focus == _FocusArea.folders) {
+      _openFolders();
+      return;
+    }
     final games = _games;
     setState(() {
       _reconcileSelection(games);
@@ -353,7 +391,7 @@ class _RommSavesContentState extends State<RommSavesContent> {
   /// from the game list, the game's files. On the filters it keeps its
   /// app-wide meaning instead of doing nothing.
   void _select() {
-    if (_focus == _FocusArea.filters) {
+    if (_onTopRow) {
       GamepadNavigation.globalSelectTap?.call();
     } else {
       _deleteFocused();
@@ -504,7 +542,8 @@ class _RommSavesContentState extends State<RommSavesContent> {
   /// moves the cursor, rather than acting on a choice the user has not seen.
   void _reconcileSelection(List<RommSaveGame> games) {
     if (games.isEmpty) {
-      _focus = _FocusArea.filters;
+      // The folders button needs no saves to be useful.
+      if (!_onTopRow) _focus = _FocusArea.filters;
       return;
     }
     final previousKey = _gameKey;
@@ -530,80 +569,83 @@ class _RommSavesContentState extends State<RommSavesContent> {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: _saves,
-    builder: (context, _) {
-      final games = _games;
-      _reconcileSelection(games);
-      // The navigator owns the cursor. Otherwise an arrow key hands Flutter's
-      // focus to the first button it finds, which then shows a highlight of
-      // its own and is activated by Enter alongside the navigator's choice.
-      return ExcludeFocus(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Padding(
-              // The same inset as the NeoSync face of this tab. The app header
-              // overlays tab content and occupies 46 design pixels.
-              padding: EdgeInsets.only(top: 52.r, bottom: 8.r),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget build(BuildContext context) => _showFolders
+      ? CustomSaveFoldersView(onBack: _closeFolders)
+      : ListenableBuilder(
+          listenable: _saves,
+          builder: (context, _) {
+            final games = _games;
+            _reconcileSelection(games);
+            // The navigator owns the cursor. Otherwise an arrow key hands Flutter's
+            // focus to the first button it finds, which then shows a highlight of
+            // its own and is activated by Enter alongside the navigator's choice.
+            return ExcludeFocus(
+              child: Stack(
+                fit: StackFit.expand,
                 children: [
                   Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8.r),
-                    child: _filters(),
-                  ),
-                  Expanded(
-                    child: games.isEmpty
-                        ? _empty(loading: _saves.loading)
-                        : Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              // The game list's padding is the page margin
-                              // and the gutter, as the RomM ROM list's is.
-                              Expanded(flex: 2, child: _gameList(games)),
-                              Expanded(
-                                flex: 3,
-                                child: Padding(
-                                  padding: EdgeInsets.fromLTRB(
-                                    0,
-                                    _listInset,
-                                    8.r,
-                                    _listInset,
-                                  ),
-                                  child: _details(games[_gameIndex]),
+                    // The same inset as the NeoSync face of this tab. The app header
+                    // overlays tab content and occupies 46 design pixels.
+                    padding: EdgeInsets.only(top: 52.r, bottom: 8.r),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8.r),
+                          child: _filters(),
+                        ),
+                        Expanded(
+                          child: games.isEmpty
+                              ? _empty(loading: _saves.loading)
+                              : Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    // The game list's padding is the page margin
+                                    // and the gutter, as the RomM ROM list's is.
+                                    Expanded(flex: 2, child: _gameList(games)),
+                                    Expanded(
+                                      flex: 3,
+                                      child: Padding(
+                                        padding: EdgeInsets.fromLTRB(
+                                          0,
+                                          _listInset,
+                                          8.r,
+                                          _listInset,
+                                        ),
+                                        child: _details(games[_gameIndex]),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ],
-                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8.r),
+                          child: _footer(),
+                        ),
+                      ],
+                    ),
                   ),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8.r),
-                    child: _footer(),
-                  ),
+                  // Overlaid on the screen's bottom edge, so starting or finishing a
+                  // refresh never moves anything.
+                  if (_busy)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: IgnorePointer(
+                        child: LinearProgressIndicator(
+                          minHeight: 2.r,
+                          color: Theme.of(context).colorScheme.primary,
+                          backgroundColor: Colors.transparent,
+                        ),
+                      ),
+                    ),
                 ],
               ),
-            ),
-            // Overlaid on the screen's bottom edge, so starting or finishing a
-            // refresh never moves anything.
-            if (_busy)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: IgnorePointer(
-                  child: LinearProgressIndicator(
-                    minHeight: 2.r,
-                    color: Theme.of(context).colorScheme.primary,
-                    backgroundColor: Colors.transparent,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      );
-    },
-  );
+            );
+          },
+        );
 
   /// The auto-download note, then the controls. The note keeps a readable
   /// width: with long labels or large text on a narrow screen, the controls
@@ -636,15 +678,13 @@ class _RommSavesContentState extends State<RommSavesContent> {
                 // also when Select means Delete. Its space is kept so the rest
                 // of the row doesn't move as the cursor reaches the filters.
                 Visibility.maintain(
-                  visible: _focus != _FocusArea.filters,
+                  visible: !_onTopRow,
                   child: GamepadControl(
                     key: const ValueKey('save-delete'),
                     label: AppLocale.delete.getString(context),
                     iconPath: 'assets/images/gamepad/Xbox_View_button.png',
                     // Hidden, it keeps its space but must not take clicks.
-                    onTap: _busy || _focus == _FocusArea.filters
-                        ? null
-                        : _deleteFocused,
+                    onTap: _busy || _onTopRow ? null : _deleteFocused,
                     textColor: scheme.onError,
                     backgroundColor: scheme.error,
                   ),
@@ -761,15 +801,73 @@ class _RommSavesContentState extends State<RommSavesContent> {
 
   /// The NeoSync save list's filter chips: tinted while active, ringed while
   /// the controller is on them.
+  ///
+  /// Standalone Save Folders floats at the right end of the row, where D-pad
+  /// right from the last filter reaches it. The chips keep the room they need
+  /// and the button's label shortens to fit beside them: a second line of
+  /// chips would take its height from the lists below.
   Widget _filters() {
     final assets = _saves.assets;
-    return Wrap(
-      spacing: 8.r,
-      runSpacing: 8.r,
-      children: [
-        for (final filter in _SaveFilter.values)
-          _filterChip(filter, assets.where(filter.includes).length),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: math.max(0.0, constraints.maxWidth - 80.r),
+            ),
+            child: Wrap(
+              spacing: 8.r,
+              runSpacing: 8.r,
+              children: [
+                for (final filter in _SaveFilter.values)
+                  _filterChip(filter, assets.where(filter.includes).length),
+              ],
+            ),
+          ),
+          SizedBox(width: 8.r),
+          Expanded(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: _foldersButton(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Opens Standalone Save Folders, styled as the filter chips beside it.
+  Widget _foldersButton() {
+    final scheme = Theme.of(context).colorScheme;
+    final focused = _focus == _FocusArea.folders;
+    final color = focused ? scheme.primary : scheme.onSurface;
+    return _highlight(
+      key: const ValueKey('save-folders'),
+      focused: focused,
+      radius: CornerRadii.of(context).radiusInternal,
+      fill: scheme.surface.withValues(alpha: 0.5),
+      padding: EdgeInsets.symmetric(horizontal: 12.r, vertical: 6.r),
+      onTap: _tap(_openFolders),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Symbols.folder_special_rounded, size: 13.r, color: color),
+          SizedBox(width: 6.r),
+          Flexible(
+            child: Text(
+              AppLocale.customSaveFoldersMenu.getString(context),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11.r,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

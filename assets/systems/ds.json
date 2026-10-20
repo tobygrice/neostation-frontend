@@ -233,6 +233,10 @@
       "unique_id": "ds.standalone.melonds.dual",
       "is_retroachievements_compatible": false,
       "description": "WatermelonDS emulator",
+      "save_files": {
+        "saves": ["*.srm"],
+        "states": ["*.ml?"]
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n me.magnum.melondualds/me.magnum.melonds.ui.emulator.EmulatorActivity -a me.magnum.melonds.dev.LAUNCH_ROM -d \"{file.uri}\""

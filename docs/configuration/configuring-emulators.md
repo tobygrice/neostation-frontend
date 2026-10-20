@@ -26,7 +26,7 @@ On desktop platforms, NeoStation can ask you to select the executable for a stan
 
 NeoStation stores the selected path for that emulator. Repeat this for each standalone emulator you use.
 
-Configuring the emulator's executable is separate from cloud saves. Standalone emulators store their saves in their own folders, so to sync those saves you must also point NeoStation at each save folder in **NeoSync → Custom Save Folders**. See [NeoSync](/features/neosync/#custom-save-folders).
+Configuring the emulator's executable is separate from cloud saves. Standalone emulators store their saves in their own folders, so to sync those saves you must also point NeoStation at each save folder in **Standalone Save Folders**. See [NeoSync](/features/neosync/#standalone-save-folders).
 
 ## Android
 

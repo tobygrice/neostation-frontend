@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +13,8 @@ import 'package:neostation/models/romm_rom.dart';
 import 'package:neostation/models/sync_models.dart';
 import 'package:neostation/providers/neo_sync_provider.dart';
 import 'package:neostation/providers/romm_provider.dart';
+import 'package:neostation/data/datasources/sqlite_service.dart';
+import 'package:neostation/screens/neo_sync_screen/login_screen/custom_save_folders_view.dart';
 import 'package:neostation/screens/neo_sync_screen/login_screen/neo_sync_content.dart';
 import 'package:neostation/screens/romm_screen/romm_connect_content.dart';
 import 'package:neostation/screens/saves_screen/romm_save_artwork.dart';
@@ -31,6 +34,7 @@ import 'package:neostation/widgets/core_footer.dart' show GamepadControl;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'database_test_helper.dart';
 import 'romm_save_inventory_fakes.dart'
     show InventoryConnection, InventorySync, inventoryAsset;
 
@@ -55,6 +59,17 @@ class _SweepingSync extends InventorySync
 
   @override
   final ValueNotifier<Future<SyncResult>?> runningSweep = ValueNotifier(null);
+
+  /// The systems each upload retry was scoped to, null for none.
+  final List<String?> retries = [];
+  Future<SyncResult> Function() retry = () async =>
+      SyncResult.ok(data: const RommSweepSummary(uploaded: 1, upToDate: 2));
+
+  @override
+  Future<SyncResult> retryPendingUploads({String? systemFolder}) {
+    retries.add(systemFolder);
+    return retry();
+  }
 }
 
 void main() {
@@ -651,10 +666,13 @@ void main() {
   ) async {
     await manager.setActive('romm', persist: (_) async {});
     await pumpTab(tester);
-    // Right stops at the last filter instead of running on into the actions.
-    for (var i = 0; i < 4; i++) {
+    // Right stops at Standalone Save Folders, the end of the filter row,
+    // instead of running on into the actions.
+    for (var i = 0; i < 5; i++) {
       await press(tester, LogicalKeyboardKey.arrowRight);
     }
+    expect(glows(tester, 'save-folders'), isTrue);
+    await press(tester, LogicalKeyboardKey.arrowLeft);
     expect(filterFocused(tester, 2), isTrue);
     await press(tester, LogicalKeyboardKey.enter);
     expect(find.text('Game.srm'), findsNothing);
@@ -1199,5 +1217,153 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Failed to refresh cloud storage'), findsOneWidget);
     expect(notified(), isEmpty);
+  });
+
+  group('Standalone Save Folders', () {
+    final db = DatabaseTestHelper();
+    late Directory folder;
+
+    setUp(() async {
+      final adapter = await db.setUp();
+      await adapter.execute('INSERT INTO app_os (id, name) VALUES (1, ?)', [
+        SqliteService.getCurrentOs(),
+      ]);
+      await adapter.execute(
+        'INSERT INTO app_systems (id, real_name, folder_name) '
+        "VALUES ('ds', 'Nintendo DS', 'ds')",
+      );
+      await adapter.execute(
+        'INSERT INTO app_emulators (system_id, os_id, name, '
+        'unique_identifier, is_standalone, is_default) '
+        "VALUES ('ds', 1, 'Standalone WatermelonDS', "
+        "'ds.standalone.melonds.dual', 1, 0)",
+      );
+      folder = Directory.systemTemp.createTempSync('standalone_folder');
+    });
+
+    tearDown(() async {
+      CustomSaveFoldersView.debugPickFolder = null;
+      await db.tearDown();
+      folder.deleteSync(recursive: true);
+    });
+
+    /// Right from All, past Saves and States, to the button.
+    Future<void> focusFolders(WidgetTester tester) async {
+      for (var i = 0; i < 3; i++) {
+        await press(tester, LogicalKeyboardKey.arrowRight);
+      }
+    }
+
+    testWidgets('D-pad right from the last filter reaches the button', (
+      tester,
+    ) async {
+      await manager.setActive('romm', persist: (_) async {});
+      await pumpTab(tester);
+
+      await focusFolders(tester);
+
+      expect(glows(tester, 'save-folders'), isTrue);
+      expect(filterFocused(tester, 2), isFalse);
+      expect(find.text('Standalone Save Folders'), findsOneWidget);
+      await press(tester, LogicalKeyboardKey.arrowDown); // games
+      expect(glows(tester, 'save-game-rom:1'), isTrue);
+    });
+
+    testWidgets('A opens the folder screen in place, and B returns to the '
+        'button', (tester) async {
+      await manager.setActive('romm', persist: (_) async {});
+      await pumpTab(tester);
+      await focusFolders(tester);
+
+      await press(tester, LogicalKeyboardKey.enter);
+      expect(find.byType(CustomSaveFoldersView), findsOneWidget);
+      expect(find.text('Game.srm'), findsNothing);
+
+      await press(tester, LogicalKeyboardKey.backspace);
+      expect(find.byType(CustomSaveFoldersView), findsNothing);
+      expect(find.text('Game.srm'), findsOneWidget);
+      expect(glows(tester, 'save-folders'), isTrue);
+    });
+
+    testWidgets('the button is reachable with an empty inventory', (
+      tester,
+    ) async {
+      await manager.setActive('romm', persist: (_) async {});
+      connection.inventory.load = () async => [];
+      await pumpTab(tester);
+
+      await focusFolders(tester);
+      await press(tester, LogicalKeyboardKey.enter);
+
+      expect(find.byType(CustomSaveFoldersView), findsOneWidget);
+    });
+
+    testWidgets('a tap opens it too', (tester) async {
+      await manager.setActive('romm', persist: (_) async {});
+      await pumpTab(tester);
+
+      await tester.tap(find.byKey(const ValueKey('save-folders')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(CustomSaveFoldersView), findsOneWidget);
+    });
+
+    /// Configures WatermelonDS's folder for the DS through the dialog.
+    Future<void> chooseFolder(WidgetTester tester) async {
+      CustomSaveFoldersView.debugPickFolder = () async => folder.path;
+      await press(tester, LogicalKeyboardKey.keyY); // Configure
+      await tester.tap(find.text('Pick a system'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Nintendo DS (ds)').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Pick an emulator'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Standalone WatermelonDS').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Select folder'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets("choosing a folder under RomM uploads that system's saves", (
+      tester,
+    ) async {
+      await manager.setActive('romm', persist: (_) async {});
+      await pumpTab(tester);
+      await tester.tap(find.byKey(const ValueKey('save-folders')));
+      await tester.pumpAndSettle();
+
+      await chooseFolder(tester);
+
+      expect(find.text(folder.path), findsOneWidget);
+      expect(romm.retries, ['ds']);
+      expect(romm.calls, 0, reason: 'not the library-wide sweep');
+      expect(
+        notified(),
+        contains('Standalone folder synced: 1 uploaded, 2 already up to date'),
+      );
+    });
+
+    testWidgets('a failed upload is reported', (tester) async {
+      await manager.setActive('romm', persist: (_) async {});
+      romm.retry = () async => SyncResult.fail(SyncError.unknown);
+      await pumpTab(tester);
+      await tester.tap(find.byKey(const ValueKey('save-folders')));
+      await tester.pumpAndSettle();
+
+      await chooseFolder(tester);
+
+      expect(notified(), contains('Failed to sync standalone folder'));
+    });
+
+    testWidgets('under NeoSync, choosing a folder leaves RomM alone', (
+      tester,
+    ) async {
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+      await chooseFolder(tester);
+
+      expect(find.text(folder.path), findsOneWidget);
+      expect(romm.retries, isEmpty);
+    });
   });
 }

@@ -13,8 +13,8 @@ import 'package:neostation/sync/providers/romm_provider.dart';
 /// `Extra Mario Bros. [Hacks].state` and would sync a different title's saves
 /// as its own.
 ///
-/// The locator itself is deliberately left loose — shared PS2/Dreamcast memory
-/// cards and Switch saves carry no game name at all — so the rules live here.
+/// The locator itself is deliberately left loose for NeoSync's sake, so RomM's
+/// rules live here.
 void main() {
   LocalSaveFile file(String path) => LocalSaveFile(
     filePath: path,
@@ -102,23 +102,24 @@ void main() {
     });
   });
 
-  group('paths the locator matches by other means', () {
-    test('a shared memory card is untouched', () {
-      // PS2/DC cards carry no game name; rejecting them would break shared-card
-      // sync and its hazard suite.
+  // RomM syncs Single-File Saves only. A Shared Memory Card and the
+  // generic files inside a Folder Save carry no game name, and that is what
+  // keeps them from being attached to every game.
+  group('files not named after the game', () {
+    test('a shared memory card is left out', () {
       final kept = RomMSyncProvider.syncableSaves(game('Final Fantasy X.iso'), [
         file('/s/Mcd001.ps2'),
       ]);
 
-      expect(namesOf(kept), ['Mcd001.ps2']);
+      expect(namesOf(kept), isEmpty);
     });
 
-    test('a Switch save matched by title id is untouched', () {
+    test('a Switch save matched by title id is left out', () {
       final kept = RomMSyncProvider.syncableSaves(game('A Short Hike.nsp'), [
         file('/s/0100F2C0115B6000/save.dat'),
       ]);
 
-      expect(namesOf(kept), ['save.dat']);
+      expect(namesOf(kept), isEmpty);
     });
   });
 }

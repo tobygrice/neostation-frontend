@@ -19,6 +19,8 @@ import 'package:neostation/widgets/core_footer.dart';
 import 'package:neostation/widgets/confirm_action_dialog.dart';
 import 'package:neostation/services/logger_service.dart';
 import 'package:neostation/services/gamepad/gamepad_navigation_manager.dart';
+import 'package:neostation/sync/providers/romm_provider.dart';
+import 'package:neostation/sync/sync_manager.dart';
 import '../../app_screen.dart';
 import 'custom_save_folders_panel.dart';
 import 'neo_sync_shared.dart';
@@ -35,12 +37,19 @@ class CustomSaveFoldersView extends StatefulWidget {
 
   const CustomSaveFoldersView({super.key, required this.onBack});
 
+  /// Stands in for the platform folder picker, which tests cannot drive.
+  @visibleForTesting
+  static Future<String?> Function()? debugPickFolder;
+
   @override
   State<CustomSaveFoldersView> createState() => _CustomSaveFoldersViewState();
 }
 
 class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   static final _log = LoggerService.instance;
+
+  /// The notification a folder's upload shows, updated in place as it runs.
+  static const _uploadNotificationId = 'custom_save_folder_upload';
 
   late GamepadNavigation _gamepadNav;
 
@@ -155,24 +164,9 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   Future<void> _selectFolderFor(String system, String emulatorSlug) async {
     _log.i('CustomSaveFolder: picker start for $system / $emulatorSlug');
     try {
-      String? selected;
-      final isTV = await PermissionService.isTelevision();
-      if (!mounted) return;
-
-      if (isTV) {
-        selected = await TvDirectoryPicker.show(context);
-      } else {
-        final uri = await PermissionService.requestFolderAccess();
-        if (uri != null) {
-          final hasFiles = await PermissionService.hasAllFilesAccess();
-          selected =
-              await UserDataLocationService.resolveAndroidUserDataPath(
-                uri.toString(),
-                hasAllFilesAccess: hasFiles,
-              ) ??
-              UserDataLocationService.safUriToRealPath(uri.toString());
-        }
-      }
+      var selected =
+          await (CustomSaveFoldersView.debugPickFolder?.call() ??
+              _pickFolder());
 
       if (selected == null || !mounted) return;
       selected = selected.replaceFirst(RegExp(r'[\\/]+$'), '');
@@ -196,20 +190,24 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       await _loadConfigured();
 
       if (!mounted) return;
+      final folderLabel = path.basename(folderPath);
+      final romm = context.read<SyncManager>().active;
+      if (romm is RomMSyncProvider) {
+        await _uploadForRomm(romm, system, folderLabel);
+        return;
+      }
       final provider = context.read<NeoSyncProvider>();
       if (mounted) setState(() => _syncing = true);
 
       // Surface the upload progress in the app's global notification center
       // (header bell), updating the same notification in place as it runs.
-      const notificationId = 'custom_save_folder_upload';
-      final folderLabel = path.basename(folderPath);
       custom.AppNotification.showNotification(
         context,
         AppLocale.uploadingCustomFolder
             .getString(context)
             .replaceFirst('{folder}', folderLabel),
         type: custom.NotificationType.info,
-        notificationId: notificationId,
+        notificationId: _uploadNotificationId,
         progress: 0,
         ongoing: true,
       );
@@ -223,7 +221,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
                 .getString(context)
                 .replaceFirst('{folder}', folderLabel),
             type: custom.NotificationType.info,
-            notificationId: notificationId,
+            notificationId: _uploadNotificationId,
             progress: provider.syncProgress,
             ongoing: true,
           );
@@ -244,7 +242,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
               .replaceFirst('{uploaded}', '${provider.uploadedFiles}')
               .replaceFirst('{skipped}', '${provider.skippedFiles}'),
           type: custom.NotificationType.success,
-          notificationId: notificationId,
+          notificationId: _uploadNotificationId,
           progress: 1,
         );
       } finally {
@@ -263,6 +261,75 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
           type: custom.NotificationType.error,
         );
       }
+    }
+  }
+
+  /// The folder the user picks, as a real path, or null if they pick none.
+  Future<String?> _pickFolder() async {
+    final isTV = await PermissionService.isTelevision();
+    if (!mounted) return null;
+
+    if (isTV) return TvDirectoryPicker.show(context);
+    final uri = await PermissionService.requestFolderAccess();
+    if (uri == null) return null;
+    final hasFiles = await PermissionService.hasAllFilesAccess();
+    return await UserDataLocationService.resolveAndroidUserDataPath(
+          uri.toString(),
+          hasAllFilesAccess: hasFiles,
+        ) ??
+        UserDataLocationService.safUriToRealPath(uri.toString());
+  }
+
+  /// Sends the saves waiting in [system]'s RomM-linked games, now that a
+  /// folder for one of its emulators is known, through the same notification
+  /// NeoSync's folder upload uses.
+  ///
+  /// RomM syncs per game, so this is its upload retry scoped to the system,
+  /// and the counts are of games rather than files. Failures also reach the
+  /// app's RomM upload notification, which names the games.
+  Future<void> _uploadForRomm(
+    RomMSyncProvider romm,
+    String system,
+    String folderLabel,
+  ) async {
+    setState(() => _syncing = true);
+    custom.AppNotification.showNotification(
+      context,
+      AppLocale.uploadingCustomFolder
+          .getString(context)
+          .replaceFirst('{folder}', folderLabel),
+      type: custom.NotificationType.info,
+      notificationId: _uploadNotificationId,
+      ongoing: true,
+    );
+    try {
+      // The retry turns away a call made while a sweep runs, and that sweep
+      // may have walked the system before this folder was saved.
+      await romm.runningSweep.value;
+      final result = await romm.retryPendingUploads(systemFolder: system);
+      if (!mounted) return;
+      final summary = result.data;
+      if (result.success && summary is RommSweepSummary) {
+        custom.AppNotification.showNotification(
+          context,
+          AppLocale.customFolderUploadComplete
+              .getString(context)
+              .replaceFirst('{uploaded}', '${summary.uploaded}')
+              .replaceFirst('{skipped}', '${summary.upToDate}'),
+          type: custom.NotificationType.success,
+          notificationId: _uploadNotificationId,
+          progress: 1,
+        );
+      } else {
+        custom.AppNotification.showNotification(
+          context,
+          AppLocale.customFolderUploadFailed.getString(context),
+          type: custom.NotificationType.error,
+          notificationId: _uploadNotificationId,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _syncing = false);
     }
   }
 

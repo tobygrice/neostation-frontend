@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -17,19 +18,18 @@ import 'package:neostation/sync/providers/romm_provider.dart';
 
 import 'database_test_helper.dart';
 
-/// Shared-memcard (PS2/Dreamcast-style) save sync through [RomMSyncProvider].
+/// Memory cards on a PS2-style system, synced through [RomMSyncProvider].
 ///
-/// Unlike NeoSync, RomM keys saves by `rom_id` — but shared-memcard systems
-/// hand the *same* local file to every game on the card. Two RomM-downloaded
-/// PS2 games therefore upload one memcard under two different rom ids, while
-/// sharing a single bookkeeping row in `app_neo_sync_state` (keyed on
-/// provider + file path). These tests pin down that the interleaved
-/// asset timestamps never make the provider clobber newer local progress or
-/// ping-pong stale copies between the two rom ids.
+/// A RomM Asset belongs to exactly one ROM, so a Shared Memory Card
+/// (`Mcd001.ps2`, holding every game's saves) has no ROM to belong to. RomM
+/// sync used to upload the one card under every linked game, and the copies
+/// then drifted and could be pulled back over the live card. Under RomM the
+/// card is now left out entirely, in both directions, while a
+/// per-game card named after its ROM syncs like any other save.
 ///
 /// Also covers the sync opt-out gates (per-game null / per-system
-/// `neosync.sync: false`) and the pre-launch error surfacing, which share the
-/// same `_syncGame` entry point.
+/// `neosync.sync: false`), the pre-launch error surfacing and the direction of
+/// each launch hook, which share the same `_syncGame` entry point.
 
 /// In-memory RomM server: assets per rom id, upload/download bookkeeping.
 class _FakeRommService extends RommService {
@@ -40,17 +40,8 @@ class _FakeRommService extends RommService {
   int _nextAssetId = 1;
   int _stampSeq = 0;
 
-  /// Timestamp the next upload's asset gets; consumed once. When unset,
-  /// uploads get a strictly increasing near-now stamp.
-  DateTime? nextUploadStamp;
-
-  DateTime _stamp() => nextUploadStamp != null
-      ? (() {
-          final s = nextUploadStamp!;
-          nextUploadStamp = null;
-          return s;
-        })()
-      : DateTime.now().toUtc().add(Duration(seconds: ++_stampSeq));
+  DateTime _stamp() =>
+      DateTime.now().toUtc().add(Duration(seconds: ++_stampSeq));
 
   /// Plants a server-side asset as if another client uploaded it.
   RommAsset seedSave(
@@ -109,12 +100,20 @@ class _FakeRommService extends RommService {
     String? slot,
     String? deviceId,
     bool overwrite = true,
-  }) async => throw UnimplementedError('no states in these tests');
+  }) async {
+    final name = p.basename(file.path);
+    uploads.add('$romId/$name');
+    return RommAsset(
+      id: _nextAssetId++,
+      fileName: name,
+      fileSizeBytes: await file.length(),
+      isState: true,
+      updatedAt: _stamp(),
+    );
+  }
 
   /// Mirrors RomM's `PUT /api/saves/{id}`: rewrites the asset's bytes at the
-  /// path it already holds, leaving its id and location untouched. A repeat
-  /// `POST` would instead mint a fresh path while the row kept the old one —
-  /// the divergence the update path exists to avoid.
+  /// path it already holds, leaving its id and location untouched.
   @override
   Future<RommAsset> updateSave(int assetId, File file) async {
     for (final entry in savesByRom.entries) {
@@ -140,7 +139,7 @@ class _FakeRommService extends RommService {
 
   @override
   Future<RommAsset> updateState(int assetId, File file) async =>
-      throw UnimplementedError('no states in these tests');
+      throw UnimplementedError('no remote states in these tests');
 
   @override
   Future<Uint8List> downloadAssetByPath(String downloadPath) async =>
@@ -164,39 +163,31 @@ class _FakeBrowse extends RommProvider {
   RommService get service => fakeService;
 }
 
-/// Injectable NeoSync path resolution: every game's saves resolve to one
-/// shared memcard, statted live so mtime comparisons see the current file,
-/// like the real path resolver does.
-class _SharedMemcardPaths {
-  _SharedMemcardPaths(this.memcardPath);
+/// Stands in for RetroArch's folder resolution: every game is handed the same
+/// files, statted live so mtime comparisons see the current state, the way a
+/// locator that reports a shared card for every game on the system does.
+class _SaveFolder {
+  _SaveFolder(this.dir);
 
-  final String memcardPath;
+  final Directory dir;
 
-  /// When false, [locate] finds nothing — simulating the remote-only branch
-  /// where only [resolveTargets] knows the target.
-  bool locateFinds = true;
-
-  Future<List<LocalSaveFile>> locate(GameModel game) async {
-    final file = File(memcardPath);
-    if (!locateFinds || !file.existsSync()) return [];
-    final stat = file.statSync();
-    return [
+  Future<List<LocalSaveFile>> locate(GameModel game) async => [
+    for (final file in dir.listSync().whereType<File>())
       LocalSaveFile(
-        filePath: memcardPath,
-        fileName: p.basename(memcardPath),
-        fileSize: stat.size,
-        lastModified: stat.modified,
+        filePath: file.path,
+        fileName: p.basename(file.path),
+        fileSize: file.statSync().size,
+        lastModified: file.statSync().modified,
         gameName: game.name,
         isSynced: false,
-        relativePath: 'saves/${p.basename(memcardPath)}',
+        relativePath: 'saves/${p.basename(file.path)}',
       ),
-    ];
-  }
+  ];
 
   Future<List<String>> resolveTargets(
     GameModel game,
     String relativeName,
-  ) async => [memcardPath];
+  ) async => [p.join(dir.path, p.basename(relativeName))];
 }
 
 GameModel _game(String romname, {bool? cloudSync = true}) => GameModel(
@@ -219,147 +210,127 @@ void main() {
   late DatabaseAdapter db;
   late Directory tempDir;
   late File memcard;
+  late File gameCard;
   late _FakeRommService svc;
   late _FakeBrowse browse;
-  late _SharedMemcardPaths paths;
+  late _SaveFolder folder;
   late RomMSyncProvider provider;
 
-  final gameA = _game('GameA');
-  final gameB = _game('GameB');
+  final gameA = _game('GameA.iso');
+  final gameB = _game('GameB.iso');
 
   setUp(() async {
     db = await helper.setUp();
     await db.execute(SqliteMigrations.createAppRommRomMapTableSql);
     tempDir = await Directory.systemTemp.createTemp('memcard_test');
     memcard = File(p.join(tempDir.path, 'Mcd001.ps2'));
-    await memcard.writeAsString('INITIAL');
+    await memcard.writeAsString('SHARED');
+    // A per-game card, named after Game A's ROM.
+    gameCard = File(p.join(tempDir.path, 'GameA.ps2'));
+    await gameCard.writeAsString('INITIAL');
 
     await RommSaveMapRepository.putMapping(
       source: RommLinkSource.download,
-      romname: 'GameA',
+      romname: 'GameA.iso',
       systemFolder: 'ps2',
       rommRomId: 1,
     );
     await RommSaveMapRepository.putMapping(
       source: RommLinkSource.download,
-      romname: 'GameB',
+      romname: 'GameB.iso',
       systemFolder: 'ps2',
       rommRomId: 2,
     );
 
     svc = _FakeRommService();
     browse = _FakeBrowse(svc);
-    paths = _SharedMemcardPaths(memcard.path);
+    folder = _SaveFolder(tempDir);
     provider = RomMSyncProvider(
       browse,
       NeoSyncProvider(NeoSyncService()),
-      locateSaves: paths.locate,
-      resolveTargets: paths.resolveTargets,
+      locateSaves: folder.locate,
+      resolveTargets: folder.resolveTargets,
+      autoSweep: false,
     );
   });
 
   tearDown(() async {
+    provider.dispose();
     await helper.tearDown();
     await tempDir.delete(recursive: true);
   });
 
-  group('shared memcard across two rom ids', () {
-    test(
-      'each game uploads the card under its own rom id, then converges',
-      () async {
-        await provider.syncGameSavesAfterClose(gameA);
-        expect(svc.uploads, ['1/Mcd001.ps2']);
-
-        // Game B shares the card: its rom id has no remote copy yet, so the
-        // same file must upload again under rom id 2.
-        await provider.syncGameSavesAfterClose(gameB);
-        expect(svc.uploads, ['1/Mcd001.ps2', '2/Mcd001.ps2']);
-
-        // Re-syncing A must be a no-op: the shared bookkeeping row now holds
-        // B's (newer) asset timestamp, which must not read as "remote changed"
-        // for A's older asset, nor trigger a re-upload.
-        await provider.syncGameSavesAfterClose(gameA);
-        expect(svc.uploads, hasLength(2));
-        expect(await memcard.readAsString(), 'INITIAL');
-        expect(
-          provider.getGameSyncState('GameA')?.status,
-          isNot(GameSyncStatus.error),
-        );
-      },
-    );
-
-    test('a genuinely newer remote under one rom id is pulled once; the other '
-        'rom id\'s now-stale copy is not pulled back over it', () async {
+  group('shared memory cards stay out of RomM sync', () {
+    test('a shared card is uploaded under no game', () async {
       await provider.syncGameSavesAfterClose(gameA);
       await provider.syncGameSavesAfterClose(gameB);
 
-      // Another device played Game A and uploaded a newer card.
+      expect(svc.uploads, ['1/GameA.ps2']);
+    });
+
+    test('a shared card left on RomM by an earlier version is never pulled '
+        'back over the live card', () async {
       svc.seedSave(
         1,
         'Mcd001.ps2',
-        'REMOTE-A'.codeUnits,
+        'OLD COPY'.codeUnits,
         updatedAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
       );
 
-      await provider.syncGameSavesAfterClose(gameA);
-      expect(await memcard.readAsString(), 'REMOTE-A');
+      await provider.syncGameSavesBeforeLaunch(gameA);
 
-      // Game B's server copy still holds the old card. Syncing B must NOT
-      // pull that stale copy over the memcard we just updated, and must not
-      // spuriously re-upload either (the pull refreshed the shared row).
-      final uploadsBefore = svc.uploads.length;
-      await provider.syncGameSavesAfterClose(gameB);
-      expect(await memcard.readAsString(), 'REMOTE-A');
-      expect(svc.uploads.length, uploadsBefore);
+      expect(await memcard.readAsString(), 'SHARED');
     });
 
-    test(
-      'unrecorded local progress beats a stale remote (prefer local)',
-      () async {
-        // Remote has an hour-old card; the local card was just written and no
-        // sync state is recorded — local must win via upload, not be replaced.
-        svc.seedSave(
-          1,
-          'Mcd001.ps2',
-          'STALE'.codeUnits,
-          updatedAt: DateTime.now().toUtc().subtract(const Duration(hours: 1)),
-        );
-
-        await provider.syncGameSavesAfterClose(gameA);
-
-        expect(await memcard.readAsString(), 'INITIAL');
-        expect(svc.uploads, ['1/Mcd001.ps2']);
-      },
-    );
-
-    test('remote-only branch: the per-target mtime guard refuses to overwrite '
-        'a newer local card', () async {
-      // Path resolution fails to *locate* the card as a save of this game,
-      // so the remote asset looks remote-only — but the download target
-      // resolves to the existing card, which is newer than the stale asset.
-      paths.locateFinds = false;
-      svc.seedSave(
-        1,
-        'Mcd001.ps2',
-        'STALE'.codeUnits,
-        updatedAt: DateTime.now().toUtc().subtract(const Duration(hours: 1)),
-      );
-
+    test('a per-game card belongs to its own game only', () async {
       await provider.syncGameSavesAfterClose(gameA);
+      await provider.syncGameSavesAfterClose(gameB);
 
-      expect(await memcard.readAsString(), 'INITIAL');
-      expect(svc.uploads, isEmpty);
+      expect(svc.uploads, ['1/GameA.ps2']);
+      expect(svc.savesByRom[2], isNull);
+    });
+
+    test('without the path overrides, the PS2 shared-card rule is not what '
+        'RomM syncs by', () async {
+      // RetroArch-style resolution through the real locator, pointed at the
+      // test folder by the system's own sync folders. The card is not Game
+      // A's, and Game A's state, which the shared-card rule used to hide, is.
+      final folders = [tempDir.path];
+      await db.execute(
+        'INSERT INTO app_systems (id, real_name, folder_name, neosync_json) '
+        "VALUES ('ps2', 'PlayStation 2', 'ps2', ?)",
+        [
+          jsonEncode({
+            'sync': true,
+            'android_sync_folder': folders,
+            'windows_sync_folder': folders,
+            'linux_sync_folder': folders,
+            'macos_sync_folder': folders,
+          }),
+        ],
+      );
+      await File(p.join(tempDir.path, 'GameA.state')).writeAsString('STATE');
+      final real = RomMSyncProvider(
+        browse,
+        NeoSyncProvider(NeoSyncService()),
+        autoSweep: false,
+      );
+      addTearDown(real.dispose);
+
+      await real.syncGameSavesAfterClose(gameA);
+
+      expect(svc.uploads, unorderedEquals(['1/GameA.ps2', '1/GameA.state']));
     });
   });
 
   group('sync opt-out gates', () {
     test('a null per-game flag counts as disabled, like NeoSync', () async {
-      await provider.detectGameSaveFiles(_game('GameA', cloudSync: null));
+      await provider.detectGameSaveFiles(_game('GameA.iso', cloudSync: null));
 
       expect(svc.listCalls, isEmpty);
       expect(svc.uploads, isEmpty);
       expect(
-        provider.getGameSyncState('GameA')?.status,
+        provider.getGameSyncState('GameA.iso')?.status,
         GameSyncStatus.disabled,
       );
     });
@@ -375,7 +346,7 @@ void main() {
       expect(svc.listCalls, isEmpty);
       expect(svc.uploads, isEmpty);
       expect(
-        provider.getGameSyncState('GameA')?.status,
+        provider.getGameSyncState('GameA.iso')?.status,
         GameSyncStatus.disabled,
       );
     });
@@ -391,7 +362,7 @@ void main() {
 
         expect(result.success, isFalse);
         expect(
-          provider.getGameSyncState('GameA')?.status,
+          provider.getGameSyncState('GameA.iso')?.status,
           GameSyncStatus.error,
         );
       },
@@ -406,7 +377,7 @@ void main() {
     test(
       'pre-launch is download-only — a new local save is not uploaded',
       () async {
-        await memcard.writeAsString('LOCAL PROGRESS');
+        await gameCard.writeAsString('LOCAL PROGRESS');
 
         await provider.syncGameSavesBeforeLaunch(gameA);
 
@@ -415,12 +386,12 @@ void main() {
     );
 
     test('post-close uploads the save the game just wrote', () async {
-      await memcard.writeAsString('LOCAL PROGRESS');
+      await gameCard.writeAsString('LOCAL PROGRESS');
 
       final result = await provider.syncGameSavesAfterClose(gameA);
 
       expect(result.success, isTrue);
-      expect(svc.uploads, ['1/Mcd001.ps2']);
+      expect(svc.uploads, ['1/GameA.ps2']);
     });
 
     test('selecting a game in the list transfers nothing', () async {
@@ -428,10 +399,10 @@ void main() {
       // a game. It used to run a full bidirectional sync, so merely scrolling
       // onto a title could push that device's card over a newer one from
       // elsewhere — before the user had asked for the game at all.
-      await memcard.writeAsString('LOCAL PROGRESS');
+      await gameCard.writeAsString('LOCAL PROGRESS');
       svc.seedSave(
         1,
-        'Mcd001.ps2',
+        'GameA.ps2',
         'OTHER DEVICE'.codeUnits,
         updatedAt: DateTime.now().toUtc().add(const Duration(minutes: 5)),
       );
@@ -441,7 +412,7 @@ void main() {
       expect(result.success, isTrue);
       expect(svc.uploads, isEmpty, reason: 'browsing must not push');
       expect(
-        await memcard.readAsString(),
+        await gameCard.readAsString(),
         'LOCAL PROGRESS',
         reason: 'browsing must not pull either',
       );
@@ -455,17 +426,17 @@ void main() {
   group('pre-launch pulls a newer remote over a locally-changed copy', () {
     test('the other device wins when the server copy is newer', () async {
       // Local has unsynced changes *and* the server has moved on since.
-      await memcard.writeAsString('LOCAL PROGRESS');
+      await gameCard.writeAsString('LOCAL PROGRESS');
       svc.seedSave(
         1,
-        'Mcd001.ps2',
+        'GameA.ps2',
         'OTHER DEVICE'.codeUnits,
         updatedAt: DateTime.now().toUtc().add(const Duration(minutes: 5)),
       );
 
       await provider.syncGameSavesBeforeLaunch(gameA);
 
-      expect(await memcard.readAsString(), 'OTHER DEVICE');
+      expect(await gameCard.readAsString(), 'OTHER DEVICE');
       // Still download-only: nothing is pushed on the launch path.
       expect(svc.uploads, isEmpty);
     });
@@ -473,17 +444,17 @@ void main() {
     test('a locally-newer save is still not overwritten', () async {
       // The per-target mtime guard, not the localChanged test, is what protects
       // real local progress — so a stale remote must lose even now.
-      await memcard.writeAsString('LOCAL PROGRESS');
+      await gameCard.writeAsString('LOCAL PROGRESS');
       svc.seedSave(
         1,
-        'Mcd001.ps2',
+        'GameA.ps2',
         'STALE'.codeUnits,
         updatedAt: DateTime.now().toUtc().subtract(const Duration(hours: 1)),
       );
 
       await provider.syncGameSavesBeforeLaunch(gameA);
 
-      expect(await memcard.readAsString(), 'LOCAL PROGRESS');
+      expect(await gameCard.readAsString(), 'LOCAL PROGRESS');
       expect(svc.uploads, isEmpty);
     });
   });

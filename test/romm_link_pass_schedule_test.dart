@@ -136,7 +136,7 @@ class _RecordingProvider extends RomMSyncProvider {
   }
 
   @override
-  Future<SyncResult> retryPendingUploads() async {
+  Future<SyncResult> retryPendingUploads({String? systemFolder}) async {
     events.add('sweep');
     return SyncResult.ok();
   }

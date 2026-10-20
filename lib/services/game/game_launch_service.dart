@@ -21,6 +21,7 @@ import '../macos_application_service.dart';
 import 'emulator_launch_diagnostics.dart';
 import 'favorites_service.dart';
 import 'game_session_manager.dart';
+import 'launch_emulator_resolver.dart';
 import '../gamepad/gamepad_navigation_manager.dart';
 
 /// Represents the result of a game launch attempt.
@@ -114,28 +115,12 @@ class GameLaunchService {
       // Resolved once and threaded through every fallback below. `isExplicit`
       // distinguishes a choice the user actually made (a per-game override, or a
       // system default they set) from one we guessed for them — only the former
-      // is worth failing the launch over.
-      String? preferredPlayerId = game.emulatorName;
-      bool isExplicitChoice = preferredPlayerId != null;
-      String source = isExplicitChoice ? 'per-game override' : 'none';
-
-      if (preferredPlayerId == null && system.id != null) {
-        final userDefault =
-            await EmulatorRepository.getUserDefaultEmulatorForSystem(
-              system.id!,
-            );
-        if (userDefault != null) {
-          preferredPlayerId = userDefault.uniqueId;
-          isExplicitChoice = true;
-          source = 'system default (user-selected)';
-        } else {
-          final defaultEmu = await _resolveDefaultInstalledEmulator(system);
-          if (defaultEmu != null) {
-            preferredPlayerId = defaultEmu.uniqueId;
-            source = 'auto-resolved default';
-          }
-        }
-      }
+      // is worth failing the launch over. Save sync resolves the same way, so
+      // the emulator launched and the saves synced always agree.
+      final launchEmulator = await LaunchEmulatorResolver.resolve(system, game);
+      final preferredPlayerId = launchEmulator.uniqueId;
+      final isExplicitChoice = launchEmulator.isExplicit;
+      final source = launchEmulator.source;
 
       // Emulator selection has been the source of repeated, hard-to-reproduce
       // reports ("I picked melonDS, RetroArch launched"). One tagged line per
@@ -892,78 +877,6 @@ class GameLaunchService {
         e.toString(),
       );
     }
-  }
-
-  /// Resolves which emulator to auto-select when a game has no per-game
-  /// override.
-  ///
-  /// [EmulatorRepository.getDefaultEmulatorForSystem] returns the *configured*
-  /// default, which for many systems is a RetroArch core flagged `is_default`.
-  /// That core is frequently not actually installed (the RetroArch app is
-  /// present but the specific libretro core isn't), so auto-selecting it yields
-  /// a generic "Launch error" on a normal launch (issue #192). We therefore
-  /// prefer an installed standalone emulator over a RetroArch-core auto-default
-  /// so normal launches work out of the box — matching the manual workaround
-  /// users otherwise perform on every game.
-  ///
-  /// Precedence:
-  ///   1. An explicit user default (`is_user_default`) is always honored,
-  ///      installed or not — it's a deliberate choice.
-  ///   2. Otherwise prefer any positively-installed standalone for the system.
-  ///   3. Otherwise the configured default if it looks installed, else any
-  ///      installed emulator, else the configured default unchanged (so behavior
-  ///      is identical to before when nothing is installed).
-  ///
-  /// Known, irreducible limitation: a RetroArch core's real install state
-  /// cannot be verified on a stock device. Its `.so` lives in RetroArch's
-  /// private `0700` data dir, unreadable from our sandbox, and neostation must
-  /// never assume/require root — so `isCoreInstalled` fails OPEN (unknown →
-  /// treated as installed). Consequently, on a system that has ONLY an
-  /// uninstalled RetroArch core and no installed standalone, step 3 can still
-  /// return that core and the launch will fail. Step 2 (prefer an installed
-  /// standalone) minimizes this but cannot eliminate it without root or an
-  /// install-state API RetroArch does not expose.
-  static Future<CoreEmulatorModel?> _resolveDefaultInstalledEmulator(
-    SystemModel system,
-  ) async {
-    // 1. Explicit user choice wins outright.
-    final userDefault =
-        await EmulatorRepository.getUserDefaultEmulatorForSystem(system.id!);
-    if (userDefault != null) return userDefault;
-
-    final configured = await EmulatorRepository.getDefaultEmulatorForSystem(
-      system.id!,
-    );
-
-    List<CoreEmulatorModel> all;
-    try {
-      all = await loadEmulatorsForSystem(system);
-    } catch (_) {
-      // Enumeration failed → preserve prior behavior.
-      return configured;
-    }
-
-    bool isInstalledUid(String? uid) {
-      if (uid == null) return false;
-      for (final e in all) {
-        if (e.uniqueId == uid && e.isInstalled) return true;
-      }
-      return false;
-    }
-
-    // 2. Prefer a genuinely-installed standalone. This is what fixes the
-    //    non-rooted case: even when a RetroArch core is (falsely) reported
-    //    installed, a real standalone is the reliable choice.
-    for (final e in all) {
-      if (e.isInstalled && e.isStandalone) return e;
-    }
-
-    // 3. Fall back through installed configured default → any installed → raw.
-    if (isInstalledUid(configured?.uniqueId)) return configured;
-    for (final e in all) {
-      if (e.isInstalled) return e;
-    }
-    return configured;
   }
 
   /// Logs the raw default-emulator state for [system] under the `[EmuSel]` tag.

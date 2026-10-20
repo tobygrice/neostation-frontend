@@ -4204,7 +4204,7 @@ class SqliteService {
   /// Two hard rules, both learned from bugs this routine used to cause:
   ///
   /// 1. **It never writes `user_emulator_config.is_user_default`.** That column
-  ///    means "the user picked this", and [_resolveDefaultInstalledEmulator]
+  ///    means "the user picked this", and `LaunchEmulatorResolver`
   ///    honors it outright — installed or not — precisely because it is a
   ///    deliberate choice. Auto-seeding it made a guess indistinguishable from a
   ///    choice, and the old PS1 branch went further and *cleared* a real user
