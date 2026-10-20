@@ -246,23 +246,25 @@ class GameViewFooter extends StatelessWidget {
                 SfxService().playEnterSound();
                 onPlay();
               },
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12.r),
-                child: Text(
-                  isFolder
-                      // Same word the systems view uses for descending into
-                      // a container; upper-cased to match PLAY beside it.
-                      ? AppLocale.enter.getString(context).toUpperCase()
-                      : AppLocale.playButton.getString(context),
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onPrimary,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 11.r,
-                    letterSpacing: 1.5,
-                    height: 1.0,
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12.r),
+                  child: Text(
+                    isFolder
+                        // Same word the systems view uses for descending into
+                        // a container; upper-cased to match PLAY beside it.
+                        ? AppLocale.enter.getString(context).toUpperCase()
+                        : AppLocale.playButton.getString(context),
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onPrimary,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 11.r,
+                      letterSpacing: 1.5,
+                      height: 1.0,
+                    ),
                   ),
                 ),
               ),

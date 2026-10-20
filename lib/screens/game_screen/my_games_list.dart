@@ -434,6 +434,8 @@ class _SystemGamesListState extends State<SystemGamesList> {
     super.initState();
     _fileProvider = widget.fileProvider;
     _backButtonFocusNode = FocusNode(skipTraversal: true);
+    // Collection loads read cached smart matches before their first await.
+    _collectionsProvider = context.read<CollectionsProvider>();
     _loadGames();
     _initializeGamepad();
 
@@ -444,7 +446,6 @@ class _SystemGamesListState extends State<SystemGamesList> {
     );
 
     // Attach persistent listeners to global providers.
-    _collectionsProvider = context.read<CollectionsProvider>();
     _lastCollectionRevision = _currentCollectionRevision;
     _collectionsProvider.addListener(_onCollectionsUpdated);
     if (SystemFolderNames.isCollection(widget.system.folderName)) {
@@ -616,7 +617,9 @@ class _SystemGamesListState extends State<SystemGamesList> {
         if (gameViewMode == 'grid' || gameViewMode == 'carousel') {
           _gamepadNav.deactivate();
         } else {
-          _gamepadNav.activate();
+          // Options can still be open when its view-mode write completes.
+          // Let the stack retain the modal rather than waking this list too.
+          GamepadNavigationManager.reactivate();
         }
       } catch (_) {}
     }
