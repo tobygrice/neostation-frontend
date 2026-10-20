@@ -295,15 +295,52 @@ class RommSavesProvider extends ChangeNotifier {
         sync?.providerId != RomMSyncProvider.kProviderId) {
       return;
     }
+    await _retry(sync!.fullSync);
+  }
+
+  /// Uploads the saves waiting in [systemFolder]'s RomM-linked games, as
+  /// choosing a Standalone Save Folder for the system does, then lists what
+  /// went up. Counted in games; null when it could not run or failed, which
+  /// the sync provider reports, naming the games.
+  ///
+  /// A sweep already running is waited out rather than skipped: it may have
+  /// passed the system before the folder was chosen, and the provider turns
+  /// away a sweep that would overlap it.
+  Future<({int uploaded, int upToDate})?> uploadSystemSaves(
+    String systemFolder,
+  ) async {
+    final running = _sweep?.value;
+    if (running != null) {
+      try {
+        await running;
+      } catch (_) {
+        // Its outcome is the sync provider's to report.
+      }
+    }
+    final sync = _manager.active;
+    if (!_live || sync is! RomMSyncProvider) return null;
+    final result = await _retry(
+      () => sync.retryPendingUploads(systemFolder: systemFolder),
+    );
+    return result is RommSweepResult
+        ? (uploaded: result.uploaded, upToDate: result.upToDate)
+        : null;
+  }
+
+  /// Runs [sweep] as this tab's retry, busy while it lasts, then refreshes so
+  /// its uploads appear. A failure, thrown or returned, is the sync provider's
+  /// to report; the refresh still runs.
+  Future<SyncResult?> _retry(Future<SyncResult> Function() sweep) async {
     final generation = _generation;
     // Set before the sync starts, as starting it announces its sweep.
     final retrying = Completer<void>();
     _retrying = retrying.future;
     notifyListeners();
+    SyncResult? result;
     try {
-      await sync!.fullSync();
+      result = await sweep();
     } catch (_) {
-      // The sync provider reports its own failures; the refresh still runs.
+      // Reported by the sync provider.
     } finally {
       _retrying = null;
       retrying.complete();
@@ -311,6 +348,7 @@ class RommSavesProvider extends ChangeNotifier {
     }
     // Unless a newer listing has already replaced the one it would refresh.
     if (generation == _generation) await refresh(retryArtwork: false);
+    return result;
   }
 
   /// Permanently removes [assets] from the server. Local copies are untouched,

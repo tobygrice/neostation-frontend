@@ -19,8 +19,6 @@ import 'package:neostation/widgets/core_footer.dart';
 import 'package:neostation/widgets/confirm_action_dialog.dart';
 import 'package:neostation/services/logger_service.dart';
 import 'package:neostation/services/gamepad/gamepad_navigation_manager.dart';
-import 'package:neostation/sync/providers/romm_provider.dart';
-import 'package:neostation/sync/sync_manager.dart';
 import '../../app_screen.dart';
 import 'custom_save_folders_panel.dart';
 import 'neo_sync_shared.dart';
@@ -32,10 +30,23 @@ import 'neo_sync_shared.dart';
 /// backgrounding while the SAF picker is open), and each configured folder can
 /// be re-synced or removed. Replaces the inline panel with its own navigation
 /// layer.
+/// What a folder's upload sent and what was already there.
+typedef SaveFolderUploadCounts = ({int uploaded, int upToDate});
+
 class CustomSaveFoldersView extends StatefulWidget {
   final VoidCallback onBack;
 
-  const CustomSaveFoldersView({super.key, required this.onBack});
+  /// Uploads the saves of a system whose folder was just chosen, for a host
+  /// whose Sync Provider is not NeoSync, answering null when it failed.
+  /// Without one, the folder's files go to NeoSync.
+  final Future<SaveFolderUploadCounts?> Function(String system)?
+  uploadSystemSaves;
+
+  const CustomSaveFoldersView({
+    super.key,
+    required this.onBack,
+    this.uploadSystemSaves,
+  });
 
   /// Stands in for the platform folder picker, which tests cannot drive.
   @visibleForTesting
@@ -191,60 +202,28 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
       if (!mounted) return;
       final folderLabel = path.basename(folderPath);
-      final romm = context.read<SyncManager>().active;
-      if (romm is RomMSyncProvider) {
-        await _uploadForRomm(romm, system, folderLabel);
-        return;
-      }
-      final provider = context.read<NeoSyncProvider>();
-      if (mounted) setState(() => _syncing = true);
-
-      // Surface the upload progress in the app's global notification center
-      // (header bell), updating the same notification in place as it runs.
-      custom.AppNotification.showNotification(
-        context,
-        AppLocale.uploadingCustomFolder
-            .getString(context)
-            .replaceFirst('{folder}', folderLabel),
-        type: custom.NotificationType.info,
-        notificationId: _uploadNotificationId,
-        progress: 0,
-        ongoing: true,
-      );
-
+      final upload = widget.uploadSystemSaves;
+      setState(() => _syncing = true);
       try {
-        void listener() {
-          if (!mounted) return;
-          custom.AppNotification.showNotification(
-            context,
-            AppLocale.uploadingCustomFolder
+        final counts = upload != null
+            ? await _uploadWith(upload, system, folderLabel)
+            : await _uploadToNeoSync(system, emulatorSlug, folderLabel);
+        if (!mounted) return;
+        if (counts == null) {
+          _showUpload(
+            AppLocale.customFolderUploadFailed.getString(context),
+            custom.NotificationType.error,
+          );
+        } else {
+          _showUpload(
+            AppLocale.customFolderUploadComplete
                 .getString(context)
-                .replaceFirst('{folder}', folderLabel),
-            type: custom.NotificationType.info,
-            notificationId: _uploadNotificationId,
-            progress: provider.syncProgress,
-            ongoing: true,
+                .replaceFirst('{uploaded}', '${counts.uploaded}')
+                .replaceFirst('{skipped}', '${counts.upToDate}'),
+            custom.NotificationType.success,
+            progress: 1,
           );
         }
-
-        provider.addListener(listener);
-        try {
-          await provider.syncCustomSaveFolder(system, emulatorSlug);
-        } finally {
-          provider.removeListener(listener);
-        }
-
-        if (!mounted) return;
-        custom.AppNotification.showNotification(
-          context,
-          AppLocale.customFolderUploadComplete
-              .getString(context)
-              .replaceFirst('{uploaded}', '${provider.uploadedFiles}')
-              .replaceFirst('{skipped}', '${provider.skippedFiles}'),
-          type: custom.NotificationType.success,
-          notificationId: _uploadNotificationId,
-          progress: 1,
-        );
       } finally {
         if (mounted) setState(() => _syncing = false);
       }
@@ -280,57 +259,73 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
         UserDataLocationService.safUriToRealPath(uri.toString());
   }
 
-  /// Sends the saves waiting in [system]'s RomM-linked games, now that a
-  /// folder for one of its emulators is known, through the same notification
-  /// NeoSync's folder upload uses.
-  ///
-  /// RomM syncs per game, so this is its upload retry scoped to the system,
-  /// and the counts are of games rather than files. Failures also reach the
-  /// app's RomM upload notification, which names the games.
-  Future<void> _uploadForRomm(
-    RomMSyncProvider romm,
+  /// Shows [message] in the folder upload's notification in the app's
+  /// notification centre (header bell), replacing what it said before.
+  void _showUpload(
+    String message,
+    custom.NotificationType type, {
+    double? progress,
+    bool ongoing = false,
+  }) => custom.AppNotification.showNotification(
+    context,
+    message,
+    type: type,
+    notificationId: _uploadNotificationId,
+    progress: progress,
+    ongoing: ongoing,
+  );
+
+  /// The upload's progress message for [folderLabel].
+  String _uploadingMessage(String folderLabel) => AppLocale
+      .uploadingCustomFolder
+      .getString(context)
+      .replaceFirst('{folder}', folderLabel);
+
+  /// Uploads the folder's existing saves to NeoSync, showing its progress.
+  Future<SaveFolderUploadCounts?> _uploadToNeoSync(
     String system,
+    String emulatorSlug,
     String folderLabel,
   ) async {
-    setState(() => _syncing = true);
-    custom.AppNotification.showNotification(
-      context,
-      AppLocale.uploadingCustomFolder
-          .getString(context)
-          .replaceFirst('{folder}', folderLabel),
-      type: custom.NotificationType.info,
-      notificationId: _uploadNotificationId,
+    final provider = context.read<NeoSyncProvider>();
+    _showUpload(
+      _uploadingMessage(folderLabel),
+      custom.NotificationType.info,
+      progress: 0,
       ongoing: true,
     );
-    try {
-      // The retry turns away a call made while a sweep runs, and that sweep
-      // may have walked the system before this folder was saved.
-      await romm.runningSweep.value;
-      final result = await romm.retryPendingUploads(systemFolder: system);
+    void listener() {
       if (!mounted) return;
-      final summary = result.data;
-      if (result.success && summary is RommSweepSummary) {
-        custom.AppNotification.showNotification(
-          context,
-          AppLocale.customFolderUploadComplete
-              .getString(context)
-              .replaceFirst('{uploaded}', '${summary.uploaded}')
-              .replaceFirst('{skipped}', '${summary.upToDate}'),
-          type: custom.NotificationType.success,
-          notificationId: _uploadNotificationId,
-          progress: 1,
-        );
-      } else {
-        custom.AppNotification.showNotification(
-          context,
-          AppLocale.customFolderUploadFailed.getString(context),
-          type: custom.NotificationType.error,
-          notificationId: _uploadNotificationId,
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _syncing = false);
+      _showUpload(
+        _uploadingMessage(folderLabel),
+        custom.NotificationType.info,
+        progress: provider.syncProgress,
+        ongoing: true,
+      );
     }
+
+    provider.addListener(listener);
+    try {
+      await provider.syncCustomSaveFolder(system, emulatorSlug);
+    } finally {
+      provider.removeListener(listener);
+    }
+    return (uploaded: provider.uploadedFiles, upToDate: provider.skippedFiles);
+  }
+
+  /// Hands the upload to the host's [CustomSaveFoldersView.uploadSystemSaves],
+  /// which reports no progress along the way.
+  Future<SaveFolderUploadCounts?> _uploadWith(
+    Future<SaveFolderUploadCounts?> Function(String system) upload,
+    String system,
+    String folderLabel,
+  ) {
+    _showUpload(
+      _uploadingMessage(folderLabel),
+      custom.NotificationType.info,
+      ongoing: true,
+    );
+    return upload(system);
   }
 
   Future<void> _removeFolder(String system, String emulatorSlug) async {

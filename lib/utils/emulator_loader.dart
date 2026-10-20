@@ -146,11 +146,7 @@ Future<List<CoreEmulatorModel>> loadEmulatorsForSystem(
             coresDir != null && await Directory(coresDir).exists();
         final updated = <CoreEmulatorModel>[];
         for (final e in emulators) {
-          final uid = e.uniqueId;
-          final isRaCore =
-              uid.contains('.ra.') ||
-              uid.contains('.ra32.') ||
-              uid.contains('.ra64.');
+          final isRaCore = CoreEmulatorModel.hasRetroArchCoreId(e.uniqueId);
           if (isRaCore && !e.hasConfiguredPath) {
             var installed = true; // fail-open default
             if (coresDirReadable &&

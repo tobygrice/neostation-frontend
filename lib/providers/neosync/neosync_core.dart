@@ -852,35 +852,9 @@ extension NeoSyncCore on NeoSyncProvider {
       final resolvedFolders = await resolveUniversalPaths(system, game: game);
       if (resolvedFolders.isEmpty) return [];
 
-      // 3. Escanear archivos en esas rutas pero en un Isolate para no bloquear la UI
+      // 3. Scan those folders off the UI isolate.
       final List<File> allFiles = [];
-      const int maxFileSize = 10 * 1024 * 1024; // 10MB
-
-      // Execute heavy listing and filtering in background
-      final List<String> filePaths = await Isolate.run(() {
-        final List<String> paths = [];
-        for (final folderPath in resolvedFolders) {
-          final dir = Directory(folderPath);
-          if (dir.existsSync()) {
-            final files = dir.listSync(recursive: true).whereType<File>().where(
-              (file) {
-                try {
-                  // NeoSync recovery backups are never synced.
-                  if (file.path.toLowerCase().endsWith('.neosync.bak')) {
-                    return false;
-                  }
-                  final size = file.lengthSync();
-                  return size <= maxFileSize;
-                } catch (e) {
-                  return false;
-                }
-              },
-            );
-            paths.addAll(files.map((f) => f.path));
-          }
-        }
-        return paths;
-      });
+      final List<String> filePaths = await listSaveFilePaths(resolvedFolders);
 
       allFiles.addAll(filePaths.map((path) => File(path)));
 

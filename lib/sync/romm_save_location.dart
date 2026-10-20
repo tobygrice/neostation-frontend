@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:isolate';
 
 import 'package:path/path.dart' as path;
 
@@ -11,6 +10,7 @@ import '../repositories/neosync_save_folder_repository.dart';
 import '../services/game/launch_emulator_resolver.dart';
 import '../services/launcher_service.dart';
 import '../utils/safe_path.dart';
+import '../utils/save_file_walk.dart';
 
 /// Where a game's saves are on this device under RomM: wherever its Launch
 /// Emulator keeps them, and nowhere else.
@@ -25,10 +25,14 @@ sealed class RommSaveLocation {
 
   /// The location for [game] on [system], or RetroArch's when either is
   /// unknown, which is how RomM sync behaved before it followed the emulator.
+  ///
+  /// [systemDefaults] is [LaunchEmulatorResolver.resolve]'s memo, for a pass
+  /// over many games.
   static Future<RommSaveLocation> resolve(
     GameModel game,
-    SystemModel? system,
-  ) async {
+    SystemModel? system, {
+    Map<String, Future<LaunchEmulator>>? systemDefaults,
+  }) async {
     if (system == null) return const RetroArchSaveLocation([]);
     final folders = await NeoSyncSaveFolderRepository.getFoldersForSystem(
       system.folderName,
@@ -36,6 +40,7 @@ sealed class RommSaveLocation {
     final emulator = (await LaunchEmulatorResolver.resolve(
       system,
       game,
+      systemDefaults: systemDefaults,
     )).uniqueId;
     if (emulator == null ||
         emulator.isEmpty ||
@@ -49,21 +54,12 @@ sealed class RommSaveLocation {
     return StandaloneSaveLocation(
       emulator: emulator,
       root: root,
-      patterns: await _patternsFor(system, emulator),
+      // Read from the system definition, the way launch options are.
+      patterns: await LauncherService.instance.loadSaveFilePatterns(
+        system.folderName,
+        emulator,
+      ),
     );
-  }
-
-  /// The emulator's `save_files`, read from the loaded system definition the
-  /// way its launch options are, and loaded first if it never has been.
-  static Future<SaveFilePatterns> _patternsFor(
-    SystemModel system,
-    String emulator,
-  ) async {
-    final launcher = LauncherService.instance;
-    if (launcher.getPlayerConfig(system.folderName, emulator) == null) {
-      await launcher.loadSystemConfig('${system.folderName}.json');
-    }
-    return launcher.getSaveFilePatterns(system.folderName, emulator);
   }
 }
 
@@ -95,10 +91,6 @@ final class StandaloneSaveLocation extends RommSaveLocation {
     required this.patterns,
   });
 
-  /// Files over this size are never saves, matching NeoSync's locator. It also
-  /// keeps a folder pointed at the ROMs from hashing disc images.
-  static const int maxFileSize = 10 * 1024 * 1024;
-
   /// The files in the folder whose names start with [romName], however deep,
   /// each tagged `saves/` or `states/` by [patterns]. Files the patterns
   /// claim for neither are left out.
@@ -106,29 +98,7 @@ final class StandaloneSaveLocation extends RommSaveLocation {
   /// Only a prefix is checked here, case-insensitively, to keep the walk cheap
   /// on a large folder; the caller applies the full name rule.
   Future<List<LocalSaveFile>> list(String romName, String gameName) async {
-    final root = this.root;
-    final prefix = romName.toLowerCase();
-    final paths = await Isolate.run(() {
-      final dir = Directory(root);
-      if (!dir.existsSync()) return const <String>[];
-      // A file that cannot be statted (a dangling link) is no save.
-      bool small(File file) {
-        try {
-          return file.lengthSync() <= maxFileSize;
-        } catch (_) {
-          return false;
-        }
-      }
-
-      return [
-        for (final file in dir.listSync(recursive: true).whereType<File>())
-          if (path.basename(file.path).toLowerCase().startsWith(prefix) &&
-              !file.path.toLowerCase().endsWith('.neosync.bak') &&
-              small(file))
-            file.path,
-      ];
-    });
-
+    final paths = await listSaveFilePaths([root], namePrefix: romName);
     final found = <LocalSaveFile>[];
     for (final filePath in paths) {
       final kind = patterns.classify(path.basename(filePath));
@@ -145,8 +115,7 @@ final class StandaloneSaveLocation extends RommSaveLocation {
           lastModified: stat.modified,
           gameName: gameName,
           isSynced: false,
-          relativePath:
-              '${kind == SaveFileKind.state ? 'states' : 'saves'}/$relative',
+          relativePath: '${kind.root}/$relative',
         ),
       );
     }
@@ -159,10 +128,10 @@ final class StandaloneSaveLocation extends RommSaveLocation {
   /// leave the folder.
   String? targetFor(
     String localName, {
-    required bool isState,
+    required SaveFileKind kind,
     required List<LocalSaveFile> localFiles,
   }) {
-    final prefix = isState ? 'states/' : 'saves/';
+    final prefix = '${kind.root}/';
     final sameKind = localFiles.where((f) => f.relativePath.startsWith(prefix));
     for (final f in sameKind) {
       if (path.basename(f.filePath) == localName) return f.filePath;

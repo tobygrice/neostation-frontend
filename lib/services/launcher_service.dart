@@ -103,6 +103,18 @@ class LauncherService {
         getPlayerConfig(systemId, uniqueId)?['save_files'],
       );
 
+  /// [getSaveFilePatterns], loading the system's definition first when it has
+  /// not been yet. [systemId] is also the definition's file name.
+  Future<SaveFilePatterns> loadSaveFilePatterns(
+    String systemId,
+    String uniqueId,
+  ) async {
+    if (getPlayerConfig(systemId, uniqueId) == null) {
+      await loadSystemConfig('$systemId.json');
+    }
+    return getSaveFilePatterns(systemId, uniqueId);
+  }
+
   /// Returns the Linux discovery hints for one emulator, or `null` when the
   /// system config isn't loaded or the emulator declares no Linux block.
   ///

@@ -1,5 +1,16 @@
-/// Whether a standalone emulator's file is a Save or a Save State.
-enum SaveFileKind { save, state }
+/// Whether a save file is a Save or a Save State.
+enum SaveFileKind {
+  save('saves'),
+  state('states');
+
+  const SaveFileKind(this.root);
+
+  /// The root a located file's relative path starts with (`saves/...`).
+  final String root;
+
+  /// [state] when [isState], else [save].
+  static SaveFileKind of({required bool isState}) => isState ? state : save;
+}
 
 /// A standalone emulator's optional `save_files` declaration in its system
 /// definition: case-insensitive file-name globs saying which of the files in
@@ -26,14 +37,19 @@ class SaveFilePatterns {
 
   /// Reads a `save_files` value. Anything malformed reads as absent, so a bad
   /// systems update degrades to "every file is a save" rather than failing.
+  /// So does a list with no usable glob: an empty `saves` would otherwise
+  /// leave the emulator with no saves at all.
   factory SaveFilePatterns.fromJson(Object? json) {
     if (json is! Map) return none;
-    List<String>? list(Object? value) => value is List
-        ? [
-            for (final v in value)
-              if (v is String && v.isNotEmpty) v,
-          ]
-        : null;
+    List<String>? list(Object? value) {
+      if (value is! List) return null;
+      final globs = [
+        for (final v in value)
+          if (v is String && v.isNotEmpty) v,
+      ];
+      return globs.isEmpty ? null : globs;
+    }
+
     return SaveFilePatterns(
       saves: list(json['saves']),
       states: list(json['states']),

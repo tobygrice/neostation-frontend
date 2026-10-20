@@ -257,7 +257,15 @@ void main() {
   late Directory watermelonDir;
   late _RetroArchFolders retroArch;
   late _FakeRommService server;
+
+  /// The provider with its own path resolution throughout, for standalone
+  /// cases.
   late RomMSyncProvider provider;
+
+  /// The same, with [retroArch] standing in for RetroArch's folders, for
+  /// cases where a game's saves are, or could wrongly be taken from,
+  /// RetroArch's.
+  late RomMSyncProvider withRetroArch;
 
   /// The library the upload retry walks.
   var library = <GameModel>[];
@@ -333,6 +341,12 @@ void main() {
     provider = RomMSyncProvider(
       _FakeBrowse(server),
       NeoSyncProvider(NeoSyncService()),
+      listGames: () async => library,
+      autoSweep: false,
+    );
+    withRetroArch = RomMSyncProvider(
+      _FakeBrowse(server),
+      NeoSyncProvider(NeoSyncService()),
       locateSaves: retroArch.locate,
       resolveTargets: retroArch.resolveTargets,
       listGames: () async => library,
@@ -342,6 +356,7 @@ void main() {
 
   tearDown(() async {
     provider.dispose();
+    withRetroArch.dispose();
     await helper.tearDown();
     await tmp.delete(recursive: true);
   });
@@ -359,7 +374,7 @@ void main() {
       );
 
       expect(local.readAsStringSync(), 'REMOTE');
-      expect(retroArch.saves.listSync(recursive: true), isEmpty);
+      expect(watermelonDir.listSync(), hasLength(1));
       expect(server.uploads, isEmpty);
     });
 
@@ -375,7 +390,6 @@ void main() {
         File(p.join(watermelonDir.path, 'Game.srm')).readAsStringSync(),
         'REMOTE',
       );
-      expect(retroArch.saves.listSync(recursive: true), isEmpty);
     });
 
     test('a server-only save lands beside the game\'s other local save, '
@@ -423,7 +437,7 @@ void main() {
     test('the game\'s own emulator choice comes first', () async {
       await setUserDefault(_raMelon);
 
-      await provider.syncGameSavesAfterClose(
+      await withRetroArch.syncGameSavesAfterClose(
         _game('Game.nds', emulator: _watermelon),
       );
 
@@ -435,7 +449,7 @@ void main() {
       () async {
         await setUserDefault(_watermelon);
 
-        await provider.syncGameSavesAfterClose(
+        await withRetroArch.syncGameSavesAfterClose(
           _game('Game.nds', emulator: _raMelon),
         );
 
@@ -446,7 +460,7 @@ void main() {
     test('then the system default the user picked', () async {
       await setUserDefault(_watermelon);
 
-      await provider.syncGameSavesAfterClose(_game('Game.nds'));
+      await withRetroArch.syncGameSavesAfterClose(_game('Game.nds'));
 
       expect(uploadedSave(), 'WATERMELON');
     });
@@ -454,13 +468,13 @@ void main() {
     test('then the default launch would pick on its own', () async {
       await setAppDefault(_watermelon);
 
-      await provider.syncGameSavesAfterClose(_game('Game.nds'));
+      await withRetroArch.syncGameSavesAfterClose(_game('Game.nds'));
 
       expect(uploadedSave(), 'WATERMELON');
     });
 
     test('a RetroArch default syncs RetroArch\'s copy', () async {
-      await provider.syncGameSavesAfterClose(_game('Game.nds'));
+      await withRetroArch.syncGameSavesAfterClose(_game('Game.nds'));
 
       expect(uploadedSave(), 'RETROARCH');
     });
@@ -472,7 +486,7 @@ void main() {
       // The real resolution appends the system's standalone folders.
       retroArch.alsoFound.add(write(watermelonDir, 'Game.srm', 'STRAY').path);
 
-      await provider.syncGameSavesAfterClose(
+      await withRetroArch.syncGameSavesAfterClose(
         _game('Game.nds', emulator: _raMelon),
       );
 
@@ -483,7 +497,7 @@ void main() {
         'standalone folder', () async {
       server.seed(1, 'Game.srm', 'REMOTE'.codeUnits);
 
-      await provider.syncGameSavesBeforeLaunch(
+      await withRetroArch.syncGameSavesBeforeLaunch(
         _game('Game.nds', emulator: _raMelon),
       );
 
@@ -498,7 +512,7 @@ void main() {
       write(retroArch.saves, 'Game.srm', 'LEFTOVER');
       write(retroArch.states, 'Game.state', 'LEFTOVER');
 
-      await provider.syncGameSavesAfterClose(
+      await withRetroArch.syncGameSavesAfterClose(
         _game('Game.nds', emulator: _watermelon),
       );
 
@@ -659,6 +673,20 @@ void main() {
       },
     );
 
+    test(
+      'a per-game card sharing an extension with the ROMs still goes up',
+      () async {
+        // `bin` is a DS ROM extension, as it is for Dreamcast, whose Flycast
+        // names per-game VMUs this way.
+        write(drasticDir, 'Game.bin', 'ROM');
+        write(drasticDir, 'Game.A1.bin', 'PER-GAME CARD');
+
+        await provider.syncGameSavesAfterClose(drastic);
+
+        expect(uploadedNames(), ['Game.A1.bin']);
+      },
+    );
+
     test('remote assets face the same name rule', () async {
       server.seed(1, 'Super Game.dsv', 'OTHER GAME'.codeUnits);
       server.seed(1, 'Game.nds', 'A ROM'.codeUnits);
@@ -702,7 +730,9 @@ void main() {
     });
 
     test('sends only that system\'s pending saves', () async {
-      final result = await provider.retryPendingUploads(systemFolder: 'ds');
+      final result = await withRetroArch.retryPendingUploads(
+        systemFolder: 'ds',
+      );
 
       expect(result.success, isTrue);
       expect(server.uploads.map((u) => '$u'), ['save 1/Game.srm @autosave']);
@@ -711,19 +741,27 @@ void main() {
     test(
       'says how many games it uploaded and how many were up to date',
       () async {
-        final first = await provider.retryPendingUploads(systemFolder: 'ds');
-        final again = await provider.retryPendingUploads(systemFolder: 'ds');
+        // Linked, but with no saves here: in neither count.
+        await link('Empty.nds', 3);
+        library.add(_game('Empty.nds', emulator: _watermelon));
 
-        expect(first.data, isA<RommSweepSummary>());
-        expect((first.data as RommSweepSummary).uploaded, 1);
-        expect((first.data as RommSweepSummary).upToDate, 0);
-        expect((again.data as RommSweepSummary).uploaded, 0);
-        expect((again.data as RommSweepSummary).upToDate, 1);
+        final first = await withRetroArch.retryPendingUploads(
+          systemFolder: 'ds',
+        );
+        final again = await withRetroArch.retryPendingUploads(
+          systemFolder: 'ds',
+        );
+
+        expect(first, isA<RommSweepResult>());
+        expect((first as RommSweepResult).uploaded, 1);
+        expect(first.upToDate, 0);
+        expect((again as RommSweepResult).uploaded, 0);
+        expect(again.upToDate, 1);
       },
     );
 
     test('unscoped, it still covers every system', () async {
-      await provider.retryPendingUploads();
+      await withRetroArch.retryPendingUploads();
 
       expect(
         server.uploads.map((u) => '${u.romId}/${u.name}'),
@@ -735,11 +773,13 @@ void main() {
         'without a failure', () async {
       write(watermelonDir, 'Unlinked.srm', 'NOT IN ROMM');
 
-      final result = await provider.retryPendingUploads(systemFolder: 'ds');
+      final result = await withRetroArch.retryPendingUploads(
+        systemFolder: 'ds',
+      );
 
       expect(result.success, isTrue);
       expect(server.uploads.map((u) => u.name), ['Game.srm']);
-      expect(provider.uploadFailures.value.isEmpty, isTrue);
+      expect(withRetroArch.uploadFailures.value.isEmpty, isTrue);
     });
   });
 
@@ -752,18 +792,18 @@ void main() {
     });
 
     test('shows the emulator as missing and lists nothing', () async {
-      await provider.detectGameSaveFiles(drastic);
+      await withRetroArch.detectGameSaveFiles(drastic);
 
       expect(
-        provider.getGameSyncState('Game.nds')?.status,
+        withRetroArch.getGameSyncState('Game.nds')?.status,
         GameSyncStatus.missingEmulator,
       );
       expect(server.listCalls, isEmpty);
     });
 
     test('transfers nothing before launch or after close', () async {
-      await provider.syncGameSavesBeforeLaunch(drastic);
-      await provider.syncGameSavesAfterClose(drastic);
+      await withRetroArch.syncGameSavesBeforeLaunch(drastic);
+      await withRetroArch.syncGameSavesAfterClose(drastic);
 
       expect(server.listCalls, isEmpty);
       expect(server.uploads, isEmpty);
@@ -771,7 +811,7 @@ void main() {
         'Game.srm',
       ]);
       expect(
-        provider.getGameSyncState('Game.nds')?.status,
+        withRetroArch.getGameSyncState('Game.nds')?.status,
         GameSyncStatus.missingEmulator,
       );
     });
@@ -779,11 +819,11 @@ void main() {
     test('has nothing for the upload retry to send', () async {
       library = [drastic];
 
-      final result = await provider.retryPendingUploads();
+      final result = await withRetroArch.retryPendingUploads();
 
       expect(result.success, isTrue);
       expect(server.uploads, isEmpty);
-      expect(provider.uploadFailures.value.isEmpty, isTrue);
+      expect(withRetroArch.uploadFailures.value.isEmpty, isTrue);
     });
   });
 }

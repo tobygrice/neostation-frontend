@@ -436,13 +436,8 @@ extension NeoSyncPathResolver on NeoSyncProvider {
   /// a RetroArch save. Returns null when no RetroArch core can be determined.
   String? _retroArchCoreSlugFromGame(GameModel game) {
     final uniqueId = game.emulatorName?.trim() ?? '';
-    if (uniqueId.isNotEmpty) {
-      final lower = uniqueId.toLowerCase();
-      if (lower.contains('.ra.') ||
-          lower.contains('.ra64.') ||
-          lower.contains('.ra32.')) {
-        return CloudPathBuilder.slugFromEmulatorUniqueId(uniqueId);
-      }
+    if (uniqueId.isNotEmpty && CoreEmulatorModel.hasRetroArchCoreId(uniqueId)) {
+      return CloudPathBuilder.slugFromEmulatorUniqueId(uniqueId);
     }
     if (game.coreName != null && game.coreName!.isNotEmpty) {
       return CloudPathBuilder.retroArchCoreSlug(game.coreName!);

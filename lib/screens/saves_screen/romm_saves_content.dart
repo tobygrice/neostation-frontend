@@ -570,7 +570,10 @@ class _RommSavesContentState extends State<RommSavesContent> {
 
   @override
   Widget build(BuildContext context) => _showFolders
-      ? CustomSaveFoldersView(onBack: _closeFolders)
+      ? CustomSaveFoldersView(
+          onBack: _closeFolders,
+          uploadSystemSaves: _saves.uploadSystemSaves,
+        )
       : ListenableBuilder(
           listenable: _saves,
           builder: (context, _) {

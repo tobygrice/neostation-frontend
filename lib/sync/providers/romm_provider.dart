@@ -31,6 +31,7 @@ import 'package:neostation/models/system_model.dart';
 import 'package:neostation/providers/neo_sync_provider.dart';
 import 'package:neostation/repositories/emulator_repository.dart';
 import 'package:neostation/repositories/game_repository.dart';
+import 'package:neostation/services/game/launch_emulator_resolver.dart';
 import 'package:neostation/services/retroarch_config_service.dart';
 import 'package:neostation/providers/romm_provider.dart';
 import 'package:neostation/repositories/romm_save_map_repository.dart';
@@ -115,17 +116,31 @@ typedef _GameKey = ({String? system, String romname});
 _GameKey _keyOf(GameModel game) =>
     (system: game.systemFolderName, romname: game.romname);
 
-/// What a successful [RomMSyncProvider.retryPendingUploads] did, counted in
-/// RomM-linked games, for the app to report.
-class RommSweepSummary {
+/// A successful [RomMSyncProvider.retryPendingUploads], counted in RomM-linked
+/// games, for the app to report.
+class RommSweepResult extends SyncResult {
   /// Games whose waiting saves went up.
   final int uploaded;
 
-  /// Games that had nothing waiting to go up.
+  /// Games with saves on this device, none of them waiting to go up. Games
+  /// with no saves here are in neither count, and nor is a game whose save
+  /// was left for its post-close sync to settle.
   final int upToDate;
 
-  const RommSweepSummary({required this.uploaded, required this.upToDate});
+  const RommSweepResult({
+    required this.uploaded,
+    required this.upToDate,
+    super.message,
+  }) : super(success: true);
 }
+
+/// Where [RomMSyncProvider] looks for a game's saves, what it found there, and
+/// the system's ROM extensions (lowercased, without their dots).
+typedef _GameSaves = ({
+  RommSaveLocation location,
+  List<LocalSaveFile> files,
+  Set<String> romExtensions,
+});
 
 /// The saves [RomMSyncProvider] could not upload, for the app to report.
 class RommUploadFailures {
@@ -347,12 +362,21 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     return SystemRepository.getSystemByFolderName(folder);
   }
 
-  /// [game]'s save files at [location] that RomM may sync.
-  Future<List<LocalSaveFile>> _localSaves(
+  /// Where [game]'s saves are, and those there that RomM may sync.
+  ///
+  /// [systemDefaults] is [LaunchEmulatorResolver.resolve]'s memo, for a pass
+  /// over many games.
+  Future<_GameSaves> _gameSaves(
     GameModel game,
-    SystemModel? system,
-    RommSaveLocation location,
-  ) async {
+    SystemModel? system, {
+    Map<String, Future<LaunchEmulator>>? systemDefaults,
+  }) async {
+    final location = await RommSaveLocation.resolve(
+      game,
+      system,
+      systemDefaults: systemDefaults,
+    );
+    final romExtensions = _normalisedExtensions(system?.extensions ?? const []);
     final found = switch (location) {
       RetroArchSaveLocation() => [
         for (final f in await _locateSaves(game))
@@ -364,10 +388,10 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       ),
       UnconfiguredSaveLocation() => const <LocalSaveFile>[],
     };
-    return syncableSaves(
-      game,
-      found,
-      romExtensions: system?.extensions ?? const [],
+    return (
+      location: location,
+      files: syncableSaves(game, found, romExtensions: romExtensions),
+      romExtensions: romExtensions,
     );
   }
 
@@ -398,12 +422,16 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   /// What it reports left to upload is [_Pending.unknown] when the pass never
   /// got as far as comparing the saves (no connection, or a listing that
   /// failed), for the caller to answer from the disk.
+  ///
+  /// [saves] is what a caller already found for the game, which spares
+  /// resolving its Launch Emulator and walking its folders a second time.
   Future<_GameSync> _syncGame(
     GameModel game, {
     required bool downloadOnly,
     bool statusOnly = false,
     bool uploadOnly = false,
     SyncDeadline? deadline,
+    _GameSaves? saves,
   }) async {
     if (!_browse.isConnected) {
       return (status: GameSyncStatus.error, uploads: _Pending.unknown);
@@ -425,7 +453,8 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       return disabled;
     }
 
-    final location = await RommSaveLocation.resolve(game, system);
+    final found = saves ?? await _gameSaves(game, system);
+    final location = found.location;
     if (location is UnconfiguredSaveLocation) {
       // Anything synced now would come from, or land in, a folder the game's
       // emulator never reads. The status says why nothing moves.
@@ -435,7 +464,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       );
       return (status: GameSyncStatus.missingEmulator, uploads: _Pending.none);
     }
-    final localFiles = await _localSaves(game, system, location);
+    final localFiles = found.files;
 
     final List<RommAsset> remote;
     try {
@@ -450,12 +479,11 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       // represents each local file. Conflict backups are dropped first: they
       // must never reach the pairing loop, and filtering them here is cheaper
       // than deduping them and discarding the survivor.
-      final romFiles = _normalisedExtensions(system?.extensions ?? const []);
       remote = latestPerLocalName(
         syncableRemote([
           ...results[0],
           ...results[1],
-        ]).where((a) => _assetCounts(a, game, romFiles, location)).toList(),
+        ]).where((a) => _isGameAsset(a, game, found)).toList(),
       );
     } catch (e) {
       _log.e('RomM listSaves/listStates failed for ${game.romname}: $e');
@@ -752,16 +780,17 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   /// * **Thumbnails.** A `.state.png` was being uploaded to RomM as a save
   ///   state. Confirmed on device: one play session produced four "states",
   ///   two of which were screenshots.
-  /// * **ROMs.** A file with one of [romExtensions] is the game itself, which
-  ///   a Standalone Save Folder pointed at the ROM folder holds beside the
-  ///   saves.
+  /// * **The ROM.** The ROM's name with one of [romExtensions] (lowercased,
+  ///   without dots) is the game itself, which a Standalone Save Folder
+  ///   pointed at the ROM folder holds beside the saves. Only that exact name:
+  ///   a per-game card such as Flycast's `Game.A1.bin` shares an extension
+  ///   with the system's ROMs and is still a save.
   @visibleForTesting
   static List<LocalSaveFile> syncableSaves(
     GameModel game,
     List<LocalSaveFile> found, {
-    Iterable<String> romExtensions = const [],
+    Set<String> romExtensions = const {},
   }) {
-    final romFiles = _normalisedExtensions(romExtensions);
     return found.where((f) {
       final name = path.basename(f.filePath);
       final lower = name.toLowerCase();
@@ -785,7 +814,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
         return false;
       }
 
-      if (_isRomFile(name, romFiles)) {
+      if (_isRom(name, game.romname, romExtensions)) {
         _log.i('RomM: skipping $name (a ROM, not a save)');
         return false;
       }
@@ -794,8 +823,8 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     }).toList();
   }
 
-  /// Whether the RomM Asset [asset] is one of [game]'s files at [location]:
-  /// its local name passes the name rule and is not a ROM, and for a
+  /// Whether the RomM Asset [asset] is one of [game]'s files where [saves]
+  /// are: its local name passes the name rule and is not the ROM, and for a
   /// standalone emulator, its patterns make the same kind of file of that name
   /// as RomM holds.
   ///
@@ -803,21 +832,17 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   /// down. That is also what keeps leftovers from earlier versions (a Shared
   /// Memory Card on every PS2 game, a state stored as a save) from ever being
   /// downloaded. Nothing is deleted: they stay on RomM for the user to clear.
-  static bool _assetCounts(
-    RommAsset asset,
-    GameModel game,
-    Set<String> romExtensions,
-    RommSaveLocation location,
-  ) {
+  static bool _isGameAsset(RommAsset asset, GameModel game, _GameSaves saves) {
     final name = localNameForAsset(asset);
-    if (!_belongsToRom(name, game.romname) || _isRomFile(name, romExtensions)) {
+    if (!_belongsToRom(name, game.romname) ||
+        _isRom(name, game.romname, saves.romExtensions)) {
       _log.i('RomM: ignoring remote ${asset.fileName} for ${game.romname}');
       return false;
     }
+    final location = saves.location;
     if (location is StandaloneSaveLocation) {
       final kind = location.patterns.classify(name);
-      final wanted = asset.isState ? SaveFileKind.state : SaveFileKind.save;
-      if (kind != wanted) {
+      if (kind != SaveFileKind.of(isState: asset.isState)) {
         _log.i(
           'RomM: ignoring remote ${asset.fileName} — not a '
           '${asset.isState ? 'state' : 'save'} of ${location.emulator}',
@@ -846,10 +871,17 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       e.toLowerCase().replaceFirst(RegExp(r'^\.'), ''),
   };
 
-  /// Whether [fileName]'s last extension is one of [romExtensions].
-  static bool _isRomFile(String fileName, Set<String> romExtensions) {
-    final ext = path.extension(fileName).toLowerCase();
-    return ext.length > 1 && romExtensions.contains(ext.substring(1));
+  /// Whether [fileName] is [romname]'s ROM name with one of [romExtensions]:
+  /// the game itself, or another of its files (`Game.bin` beside `Game.cue`).
+  static bool _isRom(
+    String fileName,
+    String romname,
+    Set<String> romExtensions,
+  ) {
+    final lower = fileName.toLowerCase();
+    final romName = _romNameWithoutExtension(romname).toLowerCase();
+    if (!lower.startsWith('$romName.')) return false;
+    return romExtensions.contains(lower.substring(romName.length + 1));
   }
 
   /// Drops a single trailing extension, matching how the library indexes a
@@ -1359,12 +1391,12 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       if (location is StandaloneSaveLocation) {
         final target = location.targetFor(
           localName,
-          isState: asset.isState,
+          kind: SaveFileKind.of(isState: asset.isState),
           localFiles: localFiles,
         );
         targets = [?target];
       } else {
-        final prefix = asset.isState ? 'states' : 'saves';
+        final prefix = SaveFileKind.of(isState: asset.isState).root;
         final sub = await _localSubfolder(game, asset.isState, localFiles);
         final relativeName = sub.isNotEmpty
             ? '$prefix/$sub/$localName'
@@ -1585,7 +1617,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   Future<void> _recordUploadOutcome(GameModel game, _Pending uploads) async {
     if (!_browse.isConnected) return;
     final left = uploads == _Pending.unknown
-        ? await _pendingUpload(game)
+        ? (await _pendingUpload(game)).pending
         : uploads;
     if (_noteUpload(game, left)) _reportUploadFailures();
   }
@@ -1740,8 +1772,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   ///
   /// [systemFolder] limits it to that system's games, which is what runs when
   /// a Standalone Save Folder is chosen for the system: the saves already in
-  /// it go up straight away. A successful result carries a
-  /// [RommSweepSummary].
+  /// it go up straight away. A successful result is a [RommSweepResult].
   Future<SyncResult> retryPendingUploads({String? systemFolder}) async {
     if (!_browse.isConnected) return SyncResult.fail(SyncError.authRequired);
     // Whichever call got here first is doing the same work, but this one did
@@ -1816,9 +1847,10 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       // With nothing linked, nothing can be waiting to go up.
       _failedUploads.clear();
       _reportUploadFailures();
-      return SyncResult.ok(
+      return const RommSweepResult(
+        uploaded: 0,
+        upToDate: 0,
         message: 'No RomM-linked games to sweep',
-        data: const RommSweepSummary(uploaded: 0, upToDate: 0),
       );
     }
 
@@ -1826,6 +1858,9 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     var upToDate = 0;
     final listed = <_GameKey>{};
     var touched = false;
+    // Most games launch in their system's default, which on Android takes a
+    // platform round trip per emulator to resolve. Once per system will do.
+    final systemDefaults = <String, Future<LaunchEmulator>>{};
     for (final game in await _listGames()) {
       // A disconnect (or a sign-out) mid-sweep ends it; every remaining game
       // would fail against a server we no longer have credentials for.
@@ -1845,8 +1880,14 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
           index.lookup(game.romname, folder) != null &&
           game.cloudSyncEnabled == true;
       if (sweepable) linked++;
-      final pending = sweepable ? await _pendingUpload(game) : _Pending.none;
-      if (sweepable && pending == _Pending.none) upToDate++;
+      final check = sweepable
+          ? await _pendingUpload(game, systemDefaults: systemDefaults)
+          : (pending: _Pending.none, saves: null);
+      final pending = check.pending;
+      if (pending == _Pending.none &&
+          (check.saves?.files.isNotEmpty ?? false)) {
+        upToDate++;
+      }
       if (pending != _Pending.waiting) {
         // Nothing of this game's is waiting to go up, or its saves could not
         // be checked.
@@ -1860,6 +1901,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
           game,
           downloadOnly: false,
           uploadOnly: true,
+          saves: check.saves,
         );
         // A sync that could not tell leaves the pre-check's answer standing.
         final left = sync.uploads == _Pending.unknown ? pending : sync.uploads;
@@ -1917,9 +1959,10 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
         'RomM upload sweep${systemFolder == null ? '' : ' of $systemFolder'}: '
         'nothing pending ($linked linked games)',
       );
-      return SyncResult.ok(
+      return RommSweepResult(
+        uploaded: 0,
+        upToDate: upToDate,
         message: 'Nothing pending',
-        data: RommSweepSummary(uploaded: 0, upToDate: upToDate),
       );
     }
     _log.i(
@@ -1932,9 +1975,10 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
         message: '$failed of $candidates pending games failed to sync',
       );
     }
-    return SyncResult.ok(
+    return RommSweepResult(
+      uploaded: synced,
+      upToDate: upToDate,
       message: '$synced of $candidates pending games synced',
-      data: RommSweepSummary(uploaded: synced, upToDate: upToDate),
     );
   }
 
@@ -1944,18 +1988,30 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   ///
   /// The point of this check is that it touches only the disk and the local
   /// sync-state table, so the sweep can rule a game out without a round trip.
-  Future<_Pending> _pendingUpload(GameModel game) async {
-    final List<LocalSaveFile> localFiles;
+  /// Also returns what it found, for the sync that follows, unless the folder
+  /// could not be read.
+  Future<({_Pending pending, _GameSaves? saves})> _pendingUpload(
+    GameModel game, {
+    Map<String, Future<LaunchEmulator>>? systemDefaults,
+  }) async {
+    final _GameSaves saves;
     try {
-      final system = await _systemOf(game);
-      final location = await RommSaveLocation.resolve(game, system);
-      localFiles = await _localSaves(game, system, location);
+      saves = await _gameSaves(
+        game,
+        await _systemOf(game),
+        systemDefaults: systemDefaults,
+      );
     } catch (e) {
       // Not worth a round trip to find out, and no reason to stop reporting a
       // save that failed before.
       _log.w('RomM: cannot locate saves for ${game.romname}: $e');
-      return _Pending.unknown;
+      return (pending: _Pending.unknown, saves: null);
     }
+    return (pending: await _pendingIn(saves.files), saves: saves);
+  }
+
+  /// Whether any of [localFiles] has changed since it was last recorded.
+  Future<_Pending> _pendingIn(List<LocalSaveFile> localFiles) async {
     for (final local in localFiles) {
       final recorded = await SyncRepository.getSyncState(
         kProviderId,

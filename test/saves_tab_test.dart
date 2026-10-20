@@ -63,7 +63,7 @@ class _SweepingSync extends InventorySync
   /// The systems each upload retry was scoped to, null for none.
   final List<String?> retries = [];
   Future<SyncResult> Function() retry = () async =>
-      SyncResult.ok(data: const RommSweepSummary(uploaded: 1, upToDate: 2));
+      const RommSweepResult(uploaded: 1, upToDate: 2);
 
   @override
   Future<SyncResult> retryPendingUploads({String? systemFolder}) {

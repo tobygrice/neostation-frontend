@@ -29,14 +29,30 @@ class LaunchEmulator {
 class LaunchEmulatorResolver {
   LaunchEmulatorResolver._();
 
+  ///
+  /// [systemDefaults] memoises the system-level answer by system id, for a
+  /// caller resolving many games in one pass: on Android the auto-resolved
+  /// default asks the platform whether each emulator is installed.
   static Future<LaunchEmulator> resolve(
     SystemModel system,
-    GameModel game,
-  ) async {
+    GameModel game, {
+    Map<String, Future<LaunchEmulator>>? systemDefaults,
+  }) {
     final perGame = game.emulatorName;
     if (perGame != null) {
-      return LaunchEmulator(perGame, 'per-game override', isExplicit: true);
+      return Future.value(
+        LaunchEmulator(perGame, 'per-game override', isExplicit: true),
+      );
     }
+    final systemId = system.id;
+    if (systemDefaults == null || systemId == null) {
+      return _systemDefault(system);
+    }
+    return systemDefaults.putIfAbsent(systemId, () => _systemDefault(system));
+  }
+
+  /// The emulator [system]'s games launch in when they choose none.
+  static Future<LaunchEmulator> _systemDefault(SystemModel system) async {
     final systemId = system.id;
     if (systemId == null) {
       return const LaunchEmulator(null, 'none', isExplicit: false);
@@ -82,7 +98,7 @@ class LaunchEmulatorResolver {
         if (e.uniqueId == uniqueId) return !e.isStandalone;
       }
     }
-    return RegExp(r'\.ra(32|64)?\.').hasMatch(uniqueId.toLowerCase());
+    return CoreEmulatorModel.hasRetroArchCoreId(uniqueId);
   }
 
   /// Resolves which emulator to auto-select when a game has no per-game
@@ -97,11 +113,10 @@ class LaunchEmulatorResolver {
   /// so normal launches work out of the box — matching the manual workaround
   /// users otherwise perform on every game.
   ///
-  /// Precedence:
-  ///   1. An explicit user default (`is_user_default`) is always honored,
-  ///      installed or not — it's a deliberate choice.
-  ///   2. Otherwise prefer any positively-installed standalone for the system.
-  ///   3. Otherwise the configured default if it looks installed, else any
+  /// Precedence, after an explicit user default (`is_user_default`), which
+  /// [_systemDefault] has already honoured, installed or not:
+  ///   1. Prefer any positively-installed standalone for the system.
+  ///   2. Otherwise the configured default if it looks installed, else any
   ///      installed emulator, else the configured default unchanged (so behavior
   ///      is identical to before when nothing is installed).
   ///
@@ -110,18 +125,13 @@ class LaunchEmulatorResolver {
   /// private `0700` data dir, unreadable from our sandbox, and neostation must
   /// never assume/require root — so `isCoreInstalled` fails OPEN (unknown →
   /// treated as installed). Consequently, on a system that has ONLY an
-  /// uninstalled RetroArch core and no installed standalone, step 3 can still
-  /// return that core and the launch will fail. Step 2 (prefer an installed
+  /// uninstalled RetroArch core and no installed standalone, step 2 can still
+  /// return that core and the launch will fail. Step 1 (prefer an installed
   /// standalone) minimizes this but cannot eliminate it without root or an
   /// install-state API RetroArch does not expose.
   static Future<CoreEmulatorModel?> _resolveDefaultInstalledEmulator(
     SystemModel system,
   ) async {
-    // 1. Explicit user choice wins outright.
-    final userDefault =
-        await EmulatorRepository.getUserDefaultEmulatorForSystem(system.id!);
-    if (userDefault != null) return userDefault;
-
     final configured = await EmulatorRepository.getDefaultEmulatorForSystem(
       system.id!,
     );
@@ -142,14 +152,14 @@ class LaunchEmulatorResolver {
       return false;
     }
 
-    // 2. Prefer a genuinely-installed standalone. This is what fixes the
+    // 1. Prefer a genuinely-installed standalone. This is what fixes the
     //    non-rooted case: even when a RetroArch core is (falsely) reported
     //    installed, a real standalone is the reliable choice.
     for (final e in all) {
       if (e.isInstalled && e.isStandalone) return e;
     }
 
-    // 3. Fall back through installed configured default → any installed → raw.
+    // 2. Fall back through installed configured default → any installed → raw.
     if (isInstalledUid(configured?.uniqueId)) return configured;
     for (final e in all) {
       if (e.isInstalled) return e;

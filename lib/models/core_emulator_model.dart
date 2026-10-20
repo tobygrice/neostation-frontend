@@ -56,6 +56,18 @@ class CoreEmulatorModel {
       androidPackageName != null &&
       androidPackageName!.startsWith(CoreEmulatorModel.retroArchPackagePrefix);
 
+  /// Whether [uniqueId] follows the `<system>.ra.<core>` naming (or `.ra32.` /
+  /// `.ra64.`) that the system definitions give RetroArch cores.
+  ///
+  /// A naming convention, not a verdict: prefer an emulator row's
+  /// [isStandalone] where there is one.
+  static bool hasRetroArchCoreId(String uniqueId) {
+    final lower = uniqueId.toLowerCase();
+    return lower.contains('.ra.') ||
+        lower.contains('.ra32.') ||
+        lower.contains('.ra64.');
+  }
+
   /// Package prefix shared by every RetroArch variant.
   static const String retroArchPackagePrefix = 'com.retroarch';
 
