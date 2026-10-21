@@ -102,9 +102,9 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       onBack: () {
         if (mounted) widget.onBack();
       },
-      onSelectItem: _openConfigDialog,
+      onSelectItem: _editFocusedFolder,
       onSelectButton: _handleSelectFolder,
-      onFavorite: _openConfigDialog,
+      onFavorite: () => _openConfigDialog(),
       onSettings: () {},
     );
 
@@ -248,12 +248,22 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     }
   }
 
-  Future<void> _selectFolderFor(String system, String emulatorSlug) async {
+  /// Picks and saves the folder for [system] and [emulatorSlug], then uploads
+  /// its saves.
+  ///
+  /// [replacing] is the configured folder this edits, as `(system,
+  /// emulatorUniqueId, path)`. An edit that moves it to another system or
+  /// emulator removes the old entry, so the list keeps one row for it.
+  Future<void> _selectFolderFor(
+    String system,
+    String emulatorSlug, {
+    (String, String, String)? replacing,
+  }) async {
     _log.i('CustomSaveFolder: picker start for $system / $emulatorSlug');
     try {
       var selected =
           await (CustomSaveFoldersView.debugPickFolder?.call() ??
-              _pickFolder());
+              _pickFolder(initialDirectory: replacing?.$3));
 
       if (selected == null || !mounted) return;
       selected = selected.replaceFirst(RegExp(r'[\\/]+$'), '');
@@ -274,9 +284,21 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
         emulatorSlug,
         folderPath,
       );
+      if (replacing case (
+        final oldSystem,
+        final oldEmulator,
+        _,
+      ) when oldSystem != system || oldEmulator != emulatorSlug) {
+        await NeoSyncSaveFolderRepository.removeFolder(oldSystem, oldEmulator);
+      }
       await _loadConfigured();
-
       if (!mounted) return;
+      // Keep the cursor on the row just saved, wherever it now sorts.
+      final saved = _configured.indexWhere(
+        (c) => c.$1 == system && c.$2 == emulatorSlug,
+      );
+      if (saved != -1) setState(() => _selectedFolderIndex = saved);
+
       final folderLabel = path.basename(folderPath);
       final upload = widget.uploadSystemSaves;
       setState(() => _syncing = true);
@@ -320,12 +342,16 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   }
 
   /// The folder the user picks, as a real path, or null if they pick none.
-  Future<String?> _pickFolder() async {
+  ///
+  /// On desktop the picker opens at [initialDirectory], the folder being
+  /// edited, when there is one.
+  Future<String?> _pickFolder({String? initialDirectory}) async {
     // The platform picker on desktop, where Android's SAF picker is no use.
     if (!Platform.isAndroid) {
       return TvDirectoryPicker.pickDirectory(
         context,
         dialogTitle: AppLocale.customSaveFolderSelect.getString(context),
+        initialDirectory: initialDirectory,
       );
     }
     final isTV = await PermissionService.isTelevision();
@@ -417,13 +443,14 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   }
 
   /// Opens the configure dialog, which does nothing while a folder is
-  /// uploading, like the footer's Configure.
+  /// uploading, like the footer's Configure. With [editing], the dialog starts
+  /// filled in with that configured folder, and what it saves replaces it.
   ///
   /// The dialog registers its own navigation layer, and popping that layer is
   /// what hands the controller back here. Reactivating this navigator when the
   /// dialog's future completes instead would wake it under the folder picker
   /// the dialog hands over to, and both would act on the same press.
-  void _openConfigDialog() {
+  void _openConfigDialog({(String, String, String)? editing}) {
     if (_syncing) return;
     _gamepadNav.deactivate();
     showDialog<void>(
@@ -431,9 +458,21 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       builder: (dialogContext) => CustomSaveFoldersDialog(
         systems: _systems,
         emulatorsBySystem: _emulatorsBySystem,
-        onSelectFolder: (system, slug) => _selectFolderFor(system, slug),
+        editing: editing,
+        onSelectFolder: (system, slug) =>
+            _selectFolderFor(system, slug, replacing: editing),
       ),
     );
+  }
+
+  /// A edits the highlighted configured folder, or configures a new one when
+  /// there is none.
+  void _editFocusedFolder() {
+    if (_configured.isEmpty) {
+      _openConfigDialog();
+      return;
+    }
+    _openConfigDialog(editing: _configured[_selectedFolderIndex]);
   }
 
   @override
@@ -527,9 +566,15 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
                       for (var i = 0; i < _configured.length; i++) ...[
                         GestureDetector(
                           key: _folderKeys[i],
-                          // Touch picks the row Delete acts on, as the D-pad
-                          // does.
-                          onTap: () => setState(() => _selectedFolderIndex = i),
+                          // A tap highlights the row, as the D-pad does, and
+                          // a tap on the highlighted row edits it, as A does.
+                          onTap: () {
+                            if (i == _selectedFolderIndex) {
+                              _editFocusedFolder();
+                            } else {
+                              setState(() => _selectedFolderIndex = i);
+                            }
+                          },
                           child: Padding(
                             padding: EdgeInsets.only(bottom: 6.r),
                             child: Container(
@@ -607,10 +652,20 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              if (_configured.isNotEmpty) ...[
+                GamepadControl(
+                  label: AppLocale.edit.getString(context),
+                  iconPath: 'assets/images/gamepad/Xbox_A_button.png',
+                  onTap: busy ? null : _editFocusedFolder,
+                  textColor: theme.colorScheme.onPrimary,
+                  backgroundColor: theme.colorScheme.primary,
+                ),
+                SizedBox(width: 8.r),
+              ],
               GamepadControl(
                 label: AppLocale.customSaveFolderConfigure.getString(context),
                 iconPath: 'assets/images/gamepad/Xbox_Y_button.png',
-                onTap: busy ? null : _openConfigDialog,
+                onTap: busy ? null : () => _openConfigDialog(),
                 textColor: theme.colorScheme.onTertiaryFixed,
                 backgroundColor: theme.colorScheme.tertiaryFixed,
               ),

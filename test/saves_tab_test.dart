@@ -1495,5 +1495,133 @@ void main() {
       expect(find.text('Nintendo DS (ds)'), findsWidgets);
       expect(find.text('Game Boy (gb)'), findsNothing);
     });
+
+    /// The value the dialog's picker keyed [key] shows.
+    String? picked(WidgetTester tester, String key) => tester
+        .widget<DropdownButtonFormField<String>>(find.byKey(ValueKey(key)))
+        .initialValue;
+
+    /// The decoration of the box that marks the Select folder button's focus.
+    BoxDecoration selectFolderMark(WidgetTester tester) =>
+        tester
+                .widget<AnimatedContainer>(
+                  find
+                      .ancestor(
+                        of: find.byType(FilledButton),
+                        matching: find.byType(AnimatedContainer),
+                      )
+                      .first,
+                )
+                .decoration!
+            as BoxDecoration;
+
+    testWidgets('A on a configured folder opens it filled in, and choosing '
+        'a folder replaces its path', (tester) async {
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+      await chooseFolder(tester);
+      final moved = Directory.systemTemp.createTempSync('standalone_moved');
+      addTearDown(() => moved.deleteSync(recursive: true));
+      CustomSaveFoldersView.debugPickFolder = () async => moved.path;
+
+      await press(tester, LogicalKeyboardKey.enter); // edit the DS row
+
+      expect(picked(tester, 'custom-folder-system'), 'ds');
+      expect(
+        picked(tester, 'custom-folder-emulator'),
+        'ds.standalone.melonds.dual',
+      );
+      expect(
+        find.byKey(const ValueKey('custom-folder-current-path')),
+        findsOneWidget,
+      );
+      // The controller starts on Select folder, which glows as the login
+      // forms' buttons do rather than wearing a border.
+      final mark = selectFolderMark(tester);
+      expect(mark.border, isNull);
+      expect(mark.boxShadow, hasLength(1));
+      expect(
+        mark.boxShadow!.single.color,
+        Theme.of(
+          tester.element(find.byType(FilledButton)),
+        ).colorScheme.primary.withValues(alpha: 0.5),
+      );
+
+      await press(tester, LogicalKeyboardKey.enter); // Select folder
+
+      expect(find.byType(CustomSaveFoldersDialog), findsNothing);
+      expect(find.text(moved.path), findsOneWidget);
+      expect(find.text(folder.path), findsNothing);
+    });
+
+    testWidgets('an edit onto another emulator replaces the folder rather '
+        'than adding one', (tester) async {
+      await addSnes();
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+      await chooseFolder(tester);
+      expect(find.text('Nintendo DS / Standalone WatermelonDS'), findsOne);
+
+      await press(tester, LogicalKeyboardKey.enter); // edit the DS row
+      await press(tester, LogicalKeyboardKey.arrowUp); // emulator
+      // The pickers keep their ring; only the button glows.
+      final ring =
+          tester
+                  .widget<AnimatedContainer>(
+                    find
+                        .ancestor(
+                          of: find.byKey(
+                            const ValueKey('custom-folder-emulator'),
+                          ),
+                          matching: find.byType(AnimatedContainer),
+                        )
+                        .first,
+                  )
+                  .decoration!
+              as BoxDecoration;
+      expect(
+        (ring.border! as Border).top.color,
+        Theme.of(
+          tester.element(find.byType(FilledButton)),
+        ).colorScheme.secondary.withValues(alpha: 0.8),
+      );
+      expect(ring.boxShadow, isNull);
+      expect(selectFolderMark(tester).boxShadow, isEmpty);
+      await press(tester, LogicalKeyboardKey.arrowUp); // system
+      await press(tester, LogicalKeyboardKey.enter); // open the systems
+      await press(tester, LogicalKeyboardKey.arrowDown);
+      await press(tester, LogicalKeyboardKey.enter); // the SNES
+      expect(
+        picked(tester, 'custom-folder-emulator'),
+        isNull,
+        reason: "the DS's emulator is not the SNES's",
+      );
+      await press(tester, LogicalKeyboardKey.enter); // open the emulators
+      await press(tester, LogicalKeyboardKey.enter); // Snes9x EX+
+      await press(tester, LogicalKeyboardKey.enter); // Select folder
+
+      expect(
+        find.text(
+          'Super Nintendo Entertainment System Hacks and Homebrew / '
+          'Snes9x EX+',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Nintendo DS / Standalone WatermelonDS'), findsNothing);
+      expect(find.text(folder.path), findsOneWidget);
+    });
+
+    testWidgets('Y configures a new folder even with one highlighted', (
+      tester,
+    ) async {
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+      await chooseFolder(tester);
+
+      await press(tester, LogicalKeyboardKey.keyY);
+
+      expect(picked(tester, 'custom-folder-system'), isNull);
+      expect(
+        find.byKey(const ValueKey('custom-folder-current-path')),
+        findsNothing,
+      );
+    });
   });
 }

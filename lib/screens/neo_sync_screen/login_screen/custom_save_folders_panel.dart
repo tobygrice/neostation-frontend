@@ -22,6 +22,9 @@ import 'package:neostation/widgets/core_footer.dart';
 /// picker and the Select folder button, and A opens or presses the focused
 /// one. While a picker's menu is open the same buttons drive the menu: up/down
 /// move through its entries, A picks one and B closes it.
+///
+/// Opened on a configured folder, it starts filled in with that folder's
+/// system, emulator and path, ready to change any of them.
 class CustomSaveFoldersDialog extends StatefulWidget {
   /// The systems offered, each of which has at least one entry in
   /// [emulatorsBySystem].
@@ -33,11 +36,16 @@ class CustomSaveFoldersDialog extends StatefulWidget {
   final Future<void> Function(String system, String emulatorSlug)
   onSelectFolder;
 
+  /// The configured folder being edited as `(system, emulatorUniqueId,
+  /// path)`, or null to configure a new one.
+  final (String, String, String)? editing;
+
   const CustomSaveFoldersDialog({
     super.key,
     required this.systems,
     required this.emulatorsBySystem,
     required this.onSelectFolder,
+    this.editing,
   });
 
   @override
@@ -64,6 +72,7 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
   @override
   void initState() {
     super.initState();
+    _prefill();
     _gamepadNav = GamepadNavigation(
       onNavigateUp: () => _navigate(TraversalDirection.up),
       onNavigateDown: () => _navigate(TraversalDirection.down),
@@ -93,6 +102,25 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
     _systemFocus.dispose();
     _emulatorFocus.dispose();
     super.dispose();
+  }
+
+  /// Fills the pickers in from [CustomSaveFoldersDialog.editing], as far as
+  /// this OS still offers its system and emulator: a picker's value has to be
+  /// one of its entries. The controller starts on Select folder, the quickest
+  /// edit, with the pickers a press up away.
+  void _prefill() {
+    final editing = widget.editing;
+    if (editing == null) return;
+    final (system, emulatorUniqueId, _) = editing;
+    final emulators = widget.emulatorsBySystem[system];
+    if (emulators == null) return;
+    _selectedSystem = system;
+    _emulators = emulators;
+    _focusedRow = _Row.emulator;
+    if (emulators.any((e) => e.uniqueId == emulatorUniqueId)) {
+      _selectedEmulatorUniqueId = emulatorUniqueId;
+      _focusedRow = _Row.selectFolder;
+    }
   }
 
   /// Whether a picker's menu is open over the dialog. The menu is a route of
@@ -215,7 +243,10 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
     await widget.onSelectFolder(system, emulatorUniqueId);
   }
 
-  /// Marks [row] as the controller's focus.
+  /// The room [_focusRing] takes around a picker: its padding and border.
+  double get _ringInset => 4.r;
+
+  /// Marks the picker on [row] as the controller's focus with a ring.
   Widget _focusRing(_Row row, Widget child) {
     final focused = _focusedRow == row;
     return AnimatedContainer(
@@ -229,6 +260,29 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
               : Colors.transparent,
           width: 2.r,
         ),
+      ),
+      child: child,
+    );
+  }
+
+  /// Marks the Select folder button as the controller's focus with the glow
+  /// the login forms give their buttons.
+  Widget _focusGlow(Widget child) {
+    final focused = _focusedRow == _Row.selectFolder;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 120),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8.r),
+        boxShadow: [
+          if (focused)
+            BoxShadow(
+              color: Theme.of(
+                context,
+              ).colorScheme.primary.withValues(alpha: 0.5),
+              blurRadius: 8.r,
+              spreadRadius: 2.r,
+            ),
+        ],
       ),
       child: child,
     );
@@ -340,23 +394,54 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
                   ),
                 ),
                 SizedBox(height: 6.r),
-                _focusRing(
-                  _Row.selectFolder,
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed:
-                          _pickingFolder || _selectedEmulatorUniqueId == null
-                          ? null
-                          : _selectFolder,
-                      icon: Icon(Symbols.folder_open_rounded, size: 14.r),
-                      label: Text(
-                        AppLocale.customSaveFolderSelect.getString(context),
-                        style: TextStyle(fontSize: 11.r),
+                // Inset by the pickers' ring, so its edges line up with
+                // the fields inside them.
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: _ringInset),
+                  child: _focusGlow(
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        // Squared off to the fields' corners, so the glow
+                        // follows its edge.
+                        style: FilledButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8.r),
+                          ),
+                        ),
+                        onPressed:
+                            _pickingFolder || _selectedEmulatorUniqueId == null
+                            ? null
+                            : _selectFolder,
+                        icon: Icon(Symbols.folder_open_rounded, size: 14.r),
+                        label: Text(
+                          AppLocale.customSaveFolderSelect.getString(context),
+                          style: TextStyle(fontSize: 11.r),
+                        ),
                       ),
                     ),
                   ),
                 ),
+                if (widget.editing case (_, _, final path)) ...[
+                  SizedBox(height: 6.r),
+                  // The folder configured now, which Select folder replaces.
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: _ringInset),
+                    child: Text(
+                      path,
+                      key: const ValueKey('custom-folder-current-path'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 9.r,
+                        fontFamily: 'monospace',
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.7,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
