@@ -6,13 +6,16 @@ import 'package:material_symbols_icons/symbols.dart';
 import 'package:path/path.dart' as path;
 import 'package:provider/provider.dart';
 import 'package:neostation/l10n/app_locale.dart';
+import 'package:neostation/models/core_emulator_model.dart';
 import 'package:neostation/providers/neo_sync_provider.dart';
 import 'package:neostation/utils/gamepad_nav.dart';
 import 'package:neostation/models/system_model.dart';
+import 'package:neostation/repositories/emulator_repository.dart';
 import 'package:neostation/repositories/neosync_save_folder_repository.dart';
 import 'package:neostation/repositories/system_repository.dart';
 import 'package:neostation/services/permission_service.dart';
 import 'package:neostation/services/user_data_location_service.dart';
+import 'package:neostation/utils/cloud_path_builder.dart';
 import 'package:neostation/widgets/custom_notification.dart' as custom;
 import 'package:neostation/widgets/tv_directory_picker.dart';
 import 'package:neostation/widgets/core_footer.dart';
@@ -64,10 +67,17 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
   late GamepadNavigation _gamepadNav;
 
+  /// The systems with a standalone emulator to configure a folder for.
   List<SystemModel> _systems = [];
+
+  /// The standalone emulators of each of [_systems], keyed by folder name.
+  Map<String, List<CoreEmulatorModel>> _emulatorsBySystem = {};
   List<(String, String, String)> _configured = [];
   bool _syncing = false;
   int _selectedFolderIndex = 0;
+
+  /// One per configured folder row, to scroll the focused one into view.
+  List<GlobalKey> _folderKeys = [];
 
   @override
   void initState() {
@@ -113,13 +123,29 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     final newIndex =
         (_selectedFolderIndex + delta + _configured.length) %
         _configured.length;
-    if (mounted) setState(() => _selectedFolderIndex = newIndex);
+    if (!mounted) return;
+    setState(() => _selectedFolderIndex = newIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final row = _selectedFolderIndex < _folderKeys.length
+          ? _folderKeys[_selectedFolderIndex].currentContext
+          : null;
+      if (row == null || !row.mounted) return;
+      Scrollable.ensureVisible(
+        row,
+        duration: const Duration(milliseconds: 150),
+        alignmentPolicy: delta < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
   }
 
   /// Select (View) asks for confirmation, then deletes the focused configured
-  /// folder; the list is empty-only so it becomes a no-op when there is nothing
-  /// configured.
+  /// folder. With nothing configured there is nothing to delete, so it opens
+  /// the configure dialog instead. Like the footer's Delete, it does nothing
+  /// while a folder is uploading.
   Future<void> _handleSelectFolder() async {
+    if (_syncing) return;
     if (_configured.isEmpty) {
       _openConfigDialog();
       return;
@@ -141,17 +167,66 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     await _removeFolder(system, slug);
   }
 
-  Future<void> _load() async {
+  Future<void> _load() => Future.wait([_loadSystems(), _loadConfigured()]);
+
+  /// Loads the systems that have a standalone emulator on this OS, so the
+  /// dialog never offers a system with nothing to pick under it.
+  Future<void> _loadSystems() async {
     try {
       final systems = await SystemRepository.getAllSystems();
-      final withEmulators = systems
-          .where((s) => s.neosync.sync || s.folderName.isNotEmpty)
-          .toList();
-      if (mounted) setState(() => _systems = withEmulators);
-    } catch (e) {
-      // Non-fatal.
+      final emulators = await Future.wait(
+        systems.map(
+          (s) => EmulatorRepository.getEmulatorsForSystemCurrentOs(
+            s.id ?? s.folderName,
+          ),
+        ),
+      );
+      final bySystem = <String, List<CoreEmulatorModel>>{};
+      for (var i = 0; i < systems.length; i++) {
+        final standalone = emulators[i].where(_isStandalone).toList();
+        if (standalone.isNotEmpty) bySystem[systems[i].folderName] = standalone;
+      }
+      if (!mounted) return;
+      setState(() {
+        _systems = [
+          for (final s in systems)
+            if (bySystem.containsKey(s.folderName)) s,
+        ];
+        _emulatorsBySystem = bySystem;
+      });
+    } catch (e, st) {
+      // Non-fatal: the dialog just has no systems to offer.
+      _log.e(
+        'CustomSaveFolder: loading systems failed',
+        error: e,
+        stackTrace: st,
+      );
     }
-    await _loadConfigured();
+  }
+
+  /// Standalone folders target standalone emulators (ARMSX2, DuckStation, ...).
+  /// RetroArch cores are discovered automatically from their saves dir, so they
+  /// must never be offered here — even if a core is mis-flagged as standalone,
+  /// its `retroarch.*` slug is the reliable tell.
+  static bool _isStandalone(CoreEmulatorModel e) =>
+      e.isStandalone &&
+      !CloudPathBuilder.slugFromEmulatorUniqueId(
+        e.uniqueId,
+      ).startsWith('retroarch.');
+
+  /// The configured row's heading: the system's and emulator's names, or their
+  /// identifiers for one this OS does not offer.
+  String _folderHeading(String system, String emulatorUniqueId) {
+    final systemName =
+        _systems.where((s) => s.folderName == system).firstOrNull?.realName ??
+        system;
+    final emulatorName =
+        _emulatorsBySystem[system]
+            ?.where((e) => e.uniqueId == emulatorUniqueId)
+            .firstOrNull
+            ?.name ??
+        emulatorUniqueId;
+    return '$systemName / $emulatorName';
   }
 
   Future<void> _loadConfigured() async {
@@ -160,6 +235,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       if (mounted) {
         setState(() {
           _configured = configured;
+          _folderKeys = List.generate(configured.length, (_) => GlobalKey());
           if (_selectedFolderIndex >= configured.length) {
             _selectedFolderIndex = configured.isEmpty
                 ? 0
@@ -245,6 +321,13 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
   /// The folder the user picks, as a real path, or null if they pick none.
   Future<String?> _pickFolder() async {
+    // The platform picker on desktop, where Android's SAF picker is no use.
+    if (!Platform.isAndroid) {
+      return TvDirectoryPicker.pickDirectory(
+        context,
+        dialogTitle: AppLocale.customSaveFolderSelect.getString(context),
+      );
+    }
     final isTV = await PermissionService.isTelevision();
     if (!mounted) return null;
 
@@ -333,17 +416,24 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     await _loadConfigured();
   }
 
-  Future<void> _openConfigDialog() async {
+  /// Opens the configure dialog, which does nothing while a folder is
+  /// uploading, like the footer's Configure.
+  ///
+  /// The dialog registers its own navigation layer, and popping that layer is
+  /// what hands the controller back here. Reactivating this navigator when the
+  /// dialog's future completes instead would wake it under the folder picker
+  /// the dialog hands over to, and both would act on the same press.
+  void _openConfigDialog() {
+    if (_syncing) return;
     _gamepadNav.deactivate();
-    await showDialog<void>(
+    showDialog<void>(
       context: context,
       builder: (dialogContext) => CustomSaveFoldersDialog(
         systems: _systems,
-        isSyncing: _syncing,
+        emulatorsBySystem: _emulatorsBySystem,
         onSelectFolder: (system, slug) => _selectFolderFor(system, slug),
       ),
     );
-    _gamepadNav.activate();
   }
 
   @override
@@ -435,62 +525,75 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
                       )
                     else
                       for (var i = 0; i < _configured.length; i++) ...[
-                        Padding(
-                          padding: EdgeInsets.only(bottom: 6.r),
-                          child: Container(
-                            padding: EdgeInsets.all(8.r),
-                            decoration: BoxDecoration(
-                              color: i == _selectedFolderIndex
-                                  ? theme.colorScheme.secondary.withValues(
-                                      alpha: 0.12,
-                                    )
-                                  : theme.colorScheme.primary.withValues(
-                                      alpha: 0.05,
-                                    ),
-                              borderRadius: BorderRadius.circular(8.r),
-                              border: Border.all(
+                        GestureDetector(
+                          key: _folderKeys[i],
+                          // Touch picks the row Delete acts on, as the D-pad
+                          // does.
+                          onTap: () => setState(() => _selectedFolderIndex = i),
+                          child: Padding(
+                            padding: EdgeInsets.only(bottom: 6.r),
+                            child: Container(
+                              padding: EdgeInsets.all(8.r),
+                              decoration: BoxDecoration(
                                 color: i == _selectedFolderIndex
                                     ? theme.colorScheme.secondary.withValues(
-                                        alpha: 0.6,
+                                        alpha: 0.12,
                                       )
                                     : theme.colorScheme.primary.withValues(
-                                        alpha: 0.15,
+                                        alpha: 0.05,
                                       ),
-                                width: i == _selectedFolderIndex ? 2.r : 1.r,
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        '${_configured[i].$1} / ${_configured[i].$2}',
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 10.r,
-                                            ),
-                                      ),
-                                      SizedBox(height: 2.r),
-                                      Text(
-                                        _configured[i].$3,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(
-                                              fontSize: 9.r,
-                                              fontFamily: 'monospace',
-                                              color: theme.colorScheme.onSurface
-                                                  .withValues(alpha: 0.7),
-                                            ),
-                                      ),
-                                    ],
-                                  ),
+                                borderRadius: BorderRadius.circular(8.r),
+                                border: Border.all(
+                                  color: i == _selectedFolderIndex
+                                      ? theme.colorScheme.secondary.withValues(
+                                          alpha: 0.6,
+                                        )
+                                      : theme.colorScheme.primary.withValues(
+                                          alpha: 0.15,
+                                        ),
+                                  width: i == _selectedFolderIndex ? 2.r : 1.r,
                                 ),
-                              ],
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _folderHeading(
+                                            _configured[i].$1,
+                                            _configured[i].$2,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: theme.textTheme.bodySmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 10.r,
+                                              ),
+                                        ),
+                                        SizedBox(height: 2.r),
+                                        Text(
+                                          _configured[i].$3,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: theme.textTheme.bodySmall
+                                              ?.copyWith(
+                                                fontSize: 9.r,
+                                                fontFamily: 'monospace',
+                                                color: theme
+                                                    .colorScheme
+                                                    .onSurface
+                                                    .withValues(alpha: 0.7),
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),

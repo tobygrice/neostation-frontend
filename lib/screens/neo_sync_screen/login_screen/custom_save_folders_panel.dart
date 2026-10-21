@@ -1,12 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:neostation/l10n/app_locale.dart';
 import 'package:neostation/models/system_model.dart';
-import 'package:neostation/data/datasources/sqlite_service.dart';
 import 'package:neostation/models/core_emulator_model.dart';
-import 'package:neostation/utils/cloud_path_builder.dart';
+import 'package:neostation/services/gamepad/gamepad_navigation_manager.dart';
 import 'package:neostation/utils/gamepad_nav.dart';
 import 'package:neostation/widgets/core_footer.dart';
 
@@ -16,16 +17,26 @@ import 'package:neostation/widgets/core_footer.dart';
 /// selection and sync run in the parent view so they survive Android
 /// backgrounding; the dialog closes with the B button or the footer Close
 /// control.
+///
+/// On a controller, up/down move between the system picker, the emulator
+/// picker and the Select folder button, and A opens or presses the focused
+/// one. While a picker's menu is open the same buttons drive the menu: up/down
+/// move through its entries, A picks one and B closes it.
 class CustomSaveFoldersDialog extends StatefulWidget {
+  /// The systems offered, each of which has at least one entry in
+  /// [emulatorsBySystem].
   final List<SystemModel> systems;
-  final bool isSyncing;
+
+  /// The standalone emulators each system offers, keyed by folder name.
+  final Map<String, List<CoreEmulatorModel>> emulatorsBySystem;
+
   final Future<void> Function(String system, String emulatorSlug)
   onSelectFolder;
 
   const CustomSaveFoldersDialog({
     super.key,
     required this.systems,
-    required this.isSyncing,
+    required this.emulatorsBySystem,
     required this.onSelectFolder,
   });
 
@@ -34,60 +45,161 @@ class CustomSaveFoldersDialog extends StatefulWidget {
       _CustomSaveFoldersDialogState();
 }
 
+/// The dialog's controller-focusable rows, top to bottom.
+enum _Row { system, emulator, selectFolder }
+
 class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
+  static const _layerId = 'custom_save_folders_dialog';
+
   late GamepadNavigation _gamepadNav;
+  final _systemFocus = FocusNode(debugLabel: 'custom-folder-system');
+  final _emulatorFocus = FocusNode(debugLabel: 'custom-folder-emulator');
   String? _selectedSystem;
   List<CoreEmulatorModel> _emulators = [];
   String? _selectedEmulatorUniqueId;
   bool _pickingFolder = false;
+  bool _closed = false;
+  _Row _focusedRow = _Row.system;
 
   @override
   void initState() {
     super.initState();
     _gamepadNav = GamepadNavigation(
-      onBack: () {
-        if (mounted) Navigator.of(context).pop();
-      },
+      onNavigateUp: () => _navigate(TraversalDirection.up),
+      onNavigateDown: () => _navigate(TraversalDirection.down),
+      onSelectItem: _activate,
+      onBack: _back,
+      // A short fixed form: one move per press.
+      allowRepeat: false,
     );
-    _gamepadNav.initialize();
-    _gamepadNav.activate();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _gamepadNav.initialize();
+      // Modal so a screen mounting behind the dialog cannot take the
+      // controller from it. The folder picker it hands over to is modal too.
+      GamepadNavigationManager.pushLayer(
+        _layerId,
+        onActivate: () => _gamepadNav.activate(),
+        onDeactivate: () => _gamepadNav.deactivate(),
+        modal: true,
+      );
+    });
   }
 
   @override
   void dispose() {
+    GamepadNavigationManager.popLayer(_layerId);
     _gamepadNav.dispose();
+    _systemFocus.dispose();
+    _emulatorFocus.dispose();
     super.dispose();
   }
 
-  Future<void> _onSystemSelected(String? folderName) async {
+  /// Whether a picker's menu is open over the dialog. The menu is a route of
+  /// its own, so the dialog's route stops being the current one.
+  bool get _menuOpen => !(ModalRoute.of(context)?.isCurrent ?? true);
+
+  /// The rows the controller can land on: the emulator picker once there is a
+  /// system, and the button once there is an emulator.
+  List<_Row> get _focusableRows => [
+    _Row.system,
+    if (_emulators.isNotEmpty) _Row.emulator,
+    if (_selectedEmulatorUniqueId != null && !_pickingFolder) _Row.selectFolder,
+  ];
+
+  /// Applies [intent] to the open menu's focused entry, unless the key press
+  /// that asked for it already has.
+  ///
+  /// A controller reaches only this dialog's navigator, but a keyboard key
+  /// reaches Flutter's focus system as well, straight afterwards (see
+  /// `appShortcuts`): Enter activates the focused entry there too, and so do
+  /// the arrows where the platform keeps them. Acting a microtask later, and
+  /// only when the key left the menu as it found it, does each press once. An
+  /// entry activated twice pops twice, and the second pop closes the dialog.
+  void _driveMenu(Intent intent) {
+    final before = FocusManager.instance.primaryFocus;
+    scheduleMicrotask(() {
+      if (!mounted || !_menuOpen) return;
+      final entry = FocusManager.instance.primaryFocus;
+      if (entry != before) return;
+      final entryContext = entry?.context;
+      if (entryContext != null) Actions.maybeInvoke(entryContext, intent);
+    });
+  }
+
+  void _navigate(TraversalDirection direction) {
+    if (_menuOpen) {
+      // Move through the open menu's entries the way the arrow keys would.
+      _driveMenu(DirectionalFocusIntent(direction));
+      return;
+    }
+    final rows = _focusableRows;
+    final next =
+        rows.indexOf(_focusedRow) +
+        (direction == TraversalDirection.up ? -1 : 1);
+    if (next < 0 || next >= rows.length) return;
+    setState(() => _focusedRow = rows[next]);
+  }
+
+  void _activate() {
+    if (_menuOpen) {
+      // Pick the focused entry, which closes the menu.
+      _driveMenu(const ActivateIntent());
+      return;
+    }
+    switch (_focusedRow) {
+      case _Row.system:
+        _openMenu(_systemFocus);
+      case _Row.emulator:
+        if (_emulators.isNotEmpty) _openMenu(_emulatorFocus);
+      case _Row.selectFolder:
+        _selectFolder();
+    }
+  }
+
+  /// Opens the menu of the picker that owns [focusNode], as a tap would.
+  void _openMenu(FocusNode focusNode) {
+    final picker = focusNode.context;
+    if (picker != null) Actions.maybeInvoke(picker, const ActivateIntent());
+  }
+
+  void _back() {
+    if (!mounted) return;
+    // With a menu open, B closes just the menu: it is the top route.
+    if (_menuOpen) {
+      Navigator.of(context).pop();
+      return;
+    }
+    _close();
+  }
+
+  /// Closes the dialog, taking input off it first so nothing it would still
+  /// hear during its exit animation reaches the screen behind it twice. Only
+  /// the first call pops: a second would pop the screen behind the dialog.
+  void _close() {
+    if (_closed) return;
+    _closed = true;
+    _gamepadNav.deactivate();
+    Navigator.of(context).pop();
+  }
+
+  void _onSystemSelected(String? folderName) {
     setState(() {
       _selectedSystem = folderName;
-      _emulators = [];
+      _emulators = folderName == null
+          ? []
+          : widget.emulatorsBySystem[folderName] ?? [];
       _selectedEmulatorUniqueId = null;
+      // Straight on to the emulator, the next thing to pick.
+      if (_emulators.isNotEmpty) _focusedRow = _Row.emulator;
     });
-    if (folderName == null) return;
+  }
 
-    try {
-      final system = widget.systems.firstWhere(
-        (s) => s.folderName == folderName,
-        orElse: () => widget.systems.first,
-      );
-      final emulators = await SqliteService.getEmulatorsForSystemCurrentOs(
-        system.id ?? system.folderName,
-      );
-      // Standalone folders target standalone emulators (ARMSX2, DuckStation, ...).
-      // RetroArch cores are discovered automatically from their saves dir, so
-      // they must never be offered here — even if a core is mis-flagged as
-      // standalone, its `retroarch.*` slug is the reliable tell.
-      final standalone = emulators.where((e) {
-        if (!e.isStandalone) return false;
-        final slug = CloudPathBuilder.slugFromEmulatorUniqueId(e.uniqueId);
-        return !slug.startsWith('retroarch.');
-      }).toList();
-      if (mounted) setState(() => _emulators = standalone);
-    } catch (e) {
-      // ignore
-    }
+  void _onEmulatorSelected(String? uniqueId) {
+    setState(() {
+      _selectedEmulatorUniqueId = uniqueId;
+      if (uniqueId != null) _focusedRow = _Row.selectFolder;
+    });
   }
 
   Future<void> _selectFolder() async {
@@ -99,14 +211,32 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
     // Closing the dialog before opening the SAF picker avoids the dialog being
     // disposed mid-flight on Android resume; the parent view completes the
     // operation and refreshes the list.
-    if (mounted) Navigator.of(context).pop();
+    if (mounted) _close();
     await widget.onSelectFolder(system, emulatorUniqueId);
+  }
+
+  /// Marks [row] as the controller's focus.
+  Widget _focusRing(_Row row, Widget child) {
+    final focused = _focusedRow == row;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 120),
+      padding: EdgeInsets.all(2.r),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(
+          color: focused
+              ? Theme.of(context).colorScheme.secondary.withValues(alpha: 0.8)
+              : Colors.transparent,
+          width: 2.r,
+        ),
+      ),
+      child: child,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isBusy = widget.isSyncing || _pickingFolder;
 
     final selectDecoration = InputDecoration(
       isDense: true,
@@ -115,115 +245,136 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
     );
     final selectStyle = TextStyle(fontSize: 12.r);
 
-    return AlertDialog(
-      title: Row(
-        children: [
-          Icon(
-            Symbols.folder_special_rounded,
-            size: 18.r,
-            color: theme.colorScheme.primary,
-          ),
-          SizedBox(width: 8.r),
-          Expanded(
-            child: Text(
-              AppLocale.customSaveFoldersTitle.getString(context),
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-                fontSize: 13.r,
+    // The controller drives this dialog, so Flutter focus is kept off its
+    // widgets: a keyboard Enter would otherwise also open whichever picker
+    // Flutter last focused, on top of the one the controller focus is on.
+    return ExcludeFocus(
+      child: AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              Symbols.folder_special_rounded,
+              size: 18.r,
+              color: theme.colorScheme.primary,
+            ),
+            SizedBox(width: 8.r),
+            Expanded(
+              child: Text(
+                AppLocale.customSaveFoldersTitle.getString(context),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13.r,
+                ),
               ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: SizedBox(
+            width: 340.r,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _focusRing(
+                  _Row.system,
+                  DropdownButtonFormField<String>(
+                    key: const ValueKey('custom-folder-system'),
+                    focusNode: _systemFocus,
+                    initialValue: _selectedSystem,
+                    // Fill the field and ellipsize long names, rather than size
+                    // to the widest item and overflow the dialog.
+                    isExpanded: true,
+                    decoration: selectDecoration,
+                    style: selectStyle,
+                    hint: Text(
+                      AppLocale.customSaveFolderPickSystem.getString(context),
+                      style: selectStyle,
+                    ),
+                    items: widget.systems
+                        .map(
+                          (s) => DropdownMenuItem(
+                            value: s.folderName,
+                            child: Text(
+                              '${s.realName} (${s.folderName})',
+                              overflow: TextOverflow.ellipsis,
+                              style: selectStyle,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onTap: () => setState(() => _focusedRow = _Row.system),
+                    onChanged: _onSystemSelected,
+                  ),
+                ),
+                SizedBox(height: 4.r),
+                _focusRing(
+                  _Row.emulator,
+                  DropdownButtonFormField<String>(
+                    key: const ValueKey('custom-folder-emulator'),
+                    focusNode: _emulatorFocus,
+                    initialValue: _selectedEmulatorUniqueId,
+                    // Fill the field and ellipsize long names, rather than size
+                    // to the widest item and overflow the dialog.
+                    isExpanded: true,
+                    decoration: selectDecoration,
+                    style: selectStyle,
+                    hint: Text(
+                      AppLocale.customSaveFolderPickEmulator.getString(context),
+                      style: selectStyle,
+                    ),
+                    items: _emulators
+                        .map(
+                          (e) => DropdownMenuItem(
+                            value: e.uniqueId,
+                            child: Text(
+                              e.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: selectStyle,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onTap: () => setState(() => _focusedRow = _Row.emulator),
+                    onChanged: _onEmulatorSelected,
+                  ),
+                ),
+                SizedBox(height: 6.r),
+                _focusRing(
+                  _Row.selectFolder,
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed:
+                          _pickingFolder || _selectedEmulatorUniqueId == null
+                          ? null
+                          : _selectFolder,
+                      icon: Icon(Symbols.folder_open_rounded, size: 14.r),
+                      label: Text(
+                        AppLocale.customSaveFolderSelect.getString(context),
+                        style: TextStyle(fontSize: 11.r),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actionsPadding: EdgeInsets.fromLTRB(16.r, 8.r, 16.r, 12.r),
+        actions: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: GamepadControl(
+              label: AppLocale.close.getString(context),
+              iconPath: 'assets/images/gamepad/Xbox_B_button.png',
+              onTap: _close,
+              textColor: theme.colorScheme.onTertiary,
+              backgroundColor: theme.colorScheme.tertiary,
             ),
           ),
         ],
       ),
-      content: SingleChildScrollView(
-        child: SizedBox(
-          width: 340.r,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: _selectedSystem,
-                decoration: selectDecoration,
-                style: selectStyle,
-                hint: Text(
-                  AppLocale.customSaveFolderPickSystem.getString(context),
-                  style: selectStyle,
-                ),
-                items: widget.systems
-                    .map(
-                      (s) => DropdownMenuItem(
-                        value: s.folderName,
-                        child: Text(
-                          '${s.realName} (${s.folderName})',
-                          overflow: TextOverflow.ellipsis,
-                          style: selectStyle,
-                        ),
-                      ),
-                    )
-                    .toList(),
-                onChanged: _onSystemSelected,
-              ),
-              SizedBox(height: 8.r),
-              DropdownButtonFormField<String>(
-                initialValue: _selectedEmulatorUniqueId,
-                decoration: selectDecoration,
-                style: selectStyle,
-                hint: Text(
-                  AppLocale.customSaveFolderPickEmulator.getString(context),
-                  style: selectStyle,
-                ),
-                items: _emulators
-                    .map(
-                      (e) => DropdownMenuItem(
-                        value: e.uniqueId,
-                        child: Text(
-                          e.name,
-                          overflow: TextOverflow.ellipsis,
-                          style: selectStyle,
-                        ),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (v) => setState(() => _selectedEmulatorUniqueId = v),
-              ),
-              SizedBox(height: 10.r),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: isBusy || _selectedEmulatorUniqueId == null
-                      ? null
-                      : _selectFolder,
-                  icon: _pickingFolder
-                      ? SizedBox(
-                          width: 14.r,
-                          height: 14.r,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(Symbols.folder_open_rounded, size: 14.r),
-                  label: Text(
-                    AppLocale.customSaveFolderSelect.getString(context),
-                    style: TextStyle(fontSize: 11.r),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      actionsPadding: EdgeInsets.fromLTRB(16.r, 8.r, 16.r, 12.r),
-      actions: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: GamepadControl(
-            label: AppLocale.close.getString(context),
-            iconPath: 'assets/images/gamepad/Xbox_B_button.png',
-            onTap: () => Navigator.of(context).pop(),
-            textColor: theme.colorScheme.onTertiary,
-            backgroundColor: theme.colorScheme.tertiary,
-          ),
-        ),
-      ],
     );
   }
 }

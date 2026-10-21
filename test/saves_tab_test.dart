@@ -14,6 +14,7 @@ import 'package:neostation/models/sync_models.dart';
 import 'package:neostation/providers/neo_sync_provider.dart';
 import 'package:neostation/providers/romm_provider.dart';
 import 'package:neostation/data/datasources/sqlite_service.dart';
+import 'package:neostation/screens/neo_sync_screen/login_screen/custom_save_folders_panel.dart';
 import 'package:neostation/screens/neo_sync_screen/login_screen/custom_save_folders_view.dart';
 import 'package:neostation/screens/neo_sync_screen/login_screen/neo_sync_content.dart';
 import 'package:neostation/screens/romm_screen/romm_connect_content.dart';
@@ -1364,6 +1365,135 @@ void main() {
 
       expect(find.text(folder.path), findsOneWidget);
       expect(romm.retries, isEmpty);
+    });
+
+    /// Adds a SNES with a long name and a standalone emulator, which the
+    /// dialog lists after the DS.
+    Future<void> addSnes() async {
+      final db = await SqliteService.getDatabase();
+      await db.execute(
+        'INSERT INTO app_systems (id, real_name, folder_name) VALUES '
+        "('snes', 'Super Nintendo Entertainment System Hacks and Homebrew', "
+        "'snes')",
+      );
+      await db.execute(
+        'INSERT INTO app_emulators (system_id, os_id, name, '
+        'unique_identifier, is_standalone, is_default) '
+        "VALUES ('snes', 1, 'Snes9x EX+', 'snes.standalone.snes9x', 1, 0)",
+      );
+    }
+
+    testWidgets('a long system name fits the dialog\'s picker', (tester) async {
+      await addSnes();
+      await pumpTab(
+        tester,
+        size: const Size(640, 480),
+        tab: CustomSaveFoldersView(onBack: () {}),
+      );
+      await press(tester, LogicalKeyboardKey.keyY); // Configure
+
+      await tester.tap(find.text('Pick a system'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find
+            .text(
+              'Super Nintendo Entertainment System Hacks and Homebrew (snes)',
+            )
+            .last,
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
+
+    // A controller reaches only the dialog's navigator; a keyboard key reaches
+    // Flutter's focus system as well, so each must act on a press just once.
+    for (final input in ['controller', 'keyboard']) {
+      testWidgets('the dialog is driven end to end by the $input', (
+        tester,
+      ) async {
+        await addSnes();
+        CustomSaveFoldersView.debugPickFolder = () async => folder.path;
+        await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+        Future<void> push(String button, LogicalKeyboardKey key) async {
+          if (input == 'keyboard') return press(tester, key);
+          await pastGrace(tester);
+          // Android delivers keycode buttons inverted: 0 pressed, 1 released.
+          await send(tester, button, 0, type: 'button');
+          await tester.pump();
+          await send(tester, button, 1, type: 'button');
+          await tester.pumpAndSettle();
+        }
+
+        Future<void> a() => push('KEYCODE_BUTTON_A', LogicalKeyboardKey.enter);
+
+        await push('KEYCODE_BUTTON_Y', LogicalKeyboardKey.keyY); // Configure
+        await a(); // open the systems
+        await push('KEYCODE_DPAD_DOWN', LogicalKeyboardKey.arrowDown);
+        await a(); // the SNES
+        expect(find.byType(CustomSaveFoldersDialog), findsOneWidget);
+        expect(
+          find.text(
+            'Super Nintendo Entertainment System Hacks and Homebrew (snes)',
+          ),
+          findsOneWidget,
+          reason: 'the menu closed on the SNES',
+        );
+
+        await a(); // open the emulators
+        await a(); // Snes9x EX+
+        await a(); // Select folder
+
+        expect(find.byType(CustomSaveFoldersDialog), findsNothing);
+        expect(find.byType(CustomSaveFoldersView), findsOneWidget);
+        expect(find.text(folder.path), findsOneWidget);
+        expect(
+          find.text(
+            'Super Nintendo Entertainment System Hacks and Homebrew / '
+            'Snes9x EX+',
+          ),
+          findsOneWidget,
+        );
+      });
+    }
+
+    testWidgets('B closes an open picker before the dialog', (tester) async {
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+      await press(tester, LogicalKeyboardKey.keyY); // Configure
+      await press(tester, LogicalKeyboardKey.enter); // open the systems
+      expect(find.text('Nintendo DS (ds)'), findsWidgets);
+
+      await press(tester, LogicalKeyboardKey.backspace);
+      expect(find.text('Nintendo DS (ds)'), findsNothing);
+      expect(find.byType(CustomSaveFoldersDialog), findsOneWidget);
+
+      await press(tester, LogicalKeyboardKey.backspace);
+      expect(find.byType(CustomSaveFoldersDialog), findsNothing);
+      expect(find.byType(CustomSaveFoldersView), findsOneWidget);
+    });
+
+    testWidgets('systems without a standalone emulator are not offered', (
+      tester,
+    ) async {
+      final db = await SqliteService.getDatabase();
+      await db.execute(
+        'INSERT INTO app_systems (id, real_name, folder_name) '
+        "VALUES ('gb', 'Game Boy', 'gb')",
+      );
+      await db.execute(
+        'INSERT INTO app_emulators (system_id, os_id, name, '
+        'unique_identifier, is_standalone, is_default) '
+        "VALUES ('gb', 1, 'RetroArch Gambatte', 'gb.ra.gambatte', 1, 1)",
+      );
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+      await press(tester, LogicalKeyboardKey.keyY); // Configure
+      await press(tester, LogicalKeyboardKey.enter); // open the systems
+
+      expect(find.text('Nintendo DS (ds)'), findsWidgets);
+      expect(find.text('Game Boy (gb)'), findsNothing);
     });
   });
 }
