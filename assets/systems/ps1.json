@@ -55,10 +55,8 @@
       "is_retroachievements_compatible": true,
       "save_files": {
         "saves": ["*.mcd"],
-        "states": ["*.sav"],
         "dirs": {
-          "saves": "memcards",
-          "states": "savestates"
+          "saves": "memcards"
         }
       },
       "platforms": {

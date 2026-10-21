@@ -135,6 +135,7 @@ These are skipped on purpose:
 - **Shared memory cards**, such as PS2's `Mcd001.ps2` or Dreamcast VMUs, which hold many games' saves. Use per-game memory cards named after the ROM instead: those sync like any other save.
 - **Folder-based saves** (Switch, PSP, 3DS), which are a folder of files per game.
 - Per-game memory cards that an emulator names by serial (`SLUS-00594_1.mcd`) or from its own game list, and saves kept as a generic file inside a folder named after the game. Neither matches the ROM's name.
+- Save states that an emulator names by serial (DuckStation's `SLUS-00594_1.sav`), and files whose ROM name runs straight into a slot number or a word: GBA.emu's `Game0.sgm`, Stella's `Game_flash.dat`. RomM cannot tell these from another game's files.
 - The ROM itself, if the folder you choose also holds your ROMs.
 
 Many emulators' definitions say which of their files are saves and which are save states. Their save states go to RomM as states, and files of theirs that are neither, such as per-game settings or cheats, stay on the device. Files left on RomM by earlier versions, such as a shared memory card attached to every PS2 game, are never downloaded. Delete them from the **Saves** tab if you no longer want them.

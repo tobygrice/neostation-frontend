@@ -514,6 +514,20 @@ void main() {
       expect(watermelonDir.listSync(), isEmpty);
     });
 
+    test('a thumbnail left on RomM as a state is never downloaded', () async {
+      // An earlier version uploaded RetroArch's thumbnails as states.
+      server.seed(1, 'Game.state.png', 'THUMBNAIL'.codeUnits, isState: true);
+      server.seed(1, 'Game.state', 'STATE'.codeUnits, isState: true);
+
+      await withRetroArch.syncGameSavesBeforeLaunch(
+        _game('Game.nds', emulator: _raMelon),
+      );
+
+      expect(retroArch.states.listSync().map((e) => p.basename(e.path)), [
+        'Game.state',
+      ]);
+    });
+
     test('a standalone game ignores RetroArch\'s leftovers', () async {
       write(retroArch.saves, 'Game.srm', 'LEFTOVER');
       write(retroArch.states, 'Game.state', 'LEFTOVER');

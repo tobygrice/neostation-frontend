@@ -50,15 +50,17 @@ void main() {
     });
   });
 
-  test('GBA.emu keeps its states apart from its saves and its per-game '
-      'settings', () {
+  test('GBA.emu syncs its saves, and leaves its states and per-game '
+      'settings alone', () {
     final patterns = launcher.getSaveFilePatterns(
       'gba',
       'gba.com.explusalpha.GbaEmu',
     );
 
     expect(patterns.classify('Game.sav'), SaveFileKind.save);
-    expect(patterns.classify('Game0.sgm'), SaveFileKind.state);
+    // `Game0.sgm`: the slot follows the ROM's name with no separator, which
+    // the name rule cannot tell from another title's, so it is not declared.
+    expect(patterns.classify('Game0.sgm'), isNull);
     expect(patterns.classify('Game.config'), isNull);
   });
 

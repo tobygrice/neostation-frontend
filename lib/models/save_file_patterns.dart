@@ -98,6 +98,13 @@ class SaveFilePatterns {
   bool declares(SaveFileKind kind) =>
       (kind == SaveFileKind.save ? saves : states) != null;
 
+  /// Whether a declared list names [fileName] outright, rather than it being a
+  /// Save only because `saves` is undeclared.
+  bool declaresFile(String fileName) {
+    final kind = classify(fileName);
+    return kind != null && declares(kind);
+  }
+
   /// What [fileName] is to this emulator, or null when it is neither and must
   /// be left alone. States are checked first, so a file both lists name is a
   /// state.

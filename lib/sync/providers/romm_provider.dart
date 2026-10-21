@@ -405,10 +405,22 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     };
     return (
       location: location,
-      files: syncableSaves(game, found, romExtensions: romExtensions),
+      files: syncableSaves(
+        game,
+        found,
+        romExtensions: romExtensions,
+        patterns: _patternsOf(location),
+      ),
       romExtensions: romExtensions,
     );
   }
+
+  /// What [location]'s emulator declares about its files: a standalone
+  /// emulator's `save_files`, and nothing for RetroArch.
+  static SaveFilePatterns _patternsOf(RommSaveLocation location) =>
+      location is StandaloneSaveLocation
+      ? location.patterns
+      : SaveFilePatterns.none;
 
   GameSyncState _buildState(
     GameModel game,
@@ -794,7 +806,9 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   /// * **Conflict backups** this provider wrote.
   /// * **Thumbnails.** A `.state.png` was being uploaded to RomM as a save
   ///   state. Confirmed on device: one play session produced four "states",
-  ///   two of which were screenshots.
+  ///   two of which were screenshots. An image the emulator's [patterns] name
+  ///   outright is its own save data, not a thumbnail: SkyEmu keeps its save
+  ///   states as `.state.png` images.
   /// * **The ROM.** The ROM's name with one of [romExtensions] (lowercased,
   ///   without dots) is the game itself, which a Standalone Save Folder
   ///   pointed at the ROM folder holds beside the saves. Only that exact name:
@@ -805,6 +819,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     GameModel game,
     List<LocalSaveFile> found, {
     Set<String> romExtensions = const {},
+    SaveFilePatterns patterns = SaveFilePatterns.none,
   }) {
     final romName = _lowerRomName(game.romname);
     return found.where((f) {
@@ -820,7 +835,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
         return false;
       }
 
-      if (_thumbnailExtensions.contains(path.extension(lower))) {
+      if (_isThumbnail(name, patterns)) {
         _log.i('RomM: skipping thumbnail $name');
         return false;
       }
@@ -840,24 +855,26 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   }
 
   /// Whether the RomM Asset [asset] is one of [game]'s files where [saves]
-  /// are: its local name passes the name rule and is not the ROM, and for a
-  /// standalone emulator, its patterns make the same kind of file of that name
-  /// as RomM holds.
+  /// are: its local name passes the name rule, is not the ROM and is not a
+  /// thumbnail, and for a standalone emulator, its patterns make the same
+  /// kind of file of that name as RomM holds.
   ///
   /// The same test a local file faces, so what is synced up is what is synced
   /// down. That is also what keeps leftovers from earlier versions (a Shared
-  /// Memory Card on every PS2 game, a state stored as a save) from ever being
-  /// downloaded. Nothing is deleted: they stay on RomM for the user to clear.
+  /// Memory Card on every PS2 game, a state stored as a save, a thumbnail
+  /// uploaded as a state) from ever being downloaded. Nothing is deleted: they
+  /// stay on RomM for the user to clear.
   static bool _isGameAsset(RommAsset asset, GameModel game, _GameSaves saves) {
     final name = localNameForAsset(asset);
     final lower = name.toLowerCase();
     final romName = _lowerRomName(game.romname);
+    final location = saves.location;
     if (!_belongsToRom(lower, romName) ||
-        _isRom(lower, romName, saves.romExtensions)) {
+        _isRom(lower, romName, saves.romExtensions) ||
+        _isThumbnail(name, _patternsOf(location))) {
       _log.i('RomM: ignoring remote ${asset.fileName} for ${game.romname}');
       return false;
     }
-    final location = saves.location;
     if (location is StandaloneSaveLocation) {
       final kind = location.patterns.classify(name);
       if (kind != SaveFileKind.of(isState: asset.isState)) {
@@ -870,6 +887,12 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     }
     return true;
   }
+
+  /// Whether [fileName] is a thumbnail: an image, unless [patterns] name it
+  /// outright as one of the emulator's own files.
+  static bool _isThumbnail(String fileName, SaveFilePatterns patterns) =>
+      _thumbnailExtensions.contains(path.extension(fileName).toLowerCase()) &&
+      !patterns.declaresFile(fileName);
 
   /// The ROM's name as the name rule compares it: [romname] without its last
   /// extension, lowercased.

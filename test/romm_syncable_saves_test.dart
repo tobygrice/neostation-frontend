@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:neostation/models/game_model.dart';
 import 'package:neostation/models/neo_sync_models.dart';
+import 'package:neostation/models/save_file_patterns.dart';
 import 'package:neostation/sync/providers/romm_provider.dart';
 
 /// Guards the filter RomM applies to NeoSync's save locator.
@@ -65,6 +66,38 @@ void main() {
       ]);
 
       expect(namesOf(kept), ['Game.state.auto']);
+    });
+
+    test('keeps an image the emulator names as one of its save states', () {
+      // SkyEmu writes its slot states as PNG images, its autosave as raw.
+      final skyEmu = SaveFilePatterns.fromJson({
+        'saves': ['*.sav'],
+        'states': ['*.state.raw', '*.state.png'],
+      });
+
+      final kept = RomMSyncProvider.syncableSaves(game('Game.gba'), [
+        file('/s/Game.slot0.state.png'),
+        file('/s/Game.autosave.state.raw'),
+      ], patterns: skyEmu);
+
+      expect(namesOf(kept), [
+        'Game.slot0.state.png',
+        'Game.autosave.state.raw',
+      ]);
+    });
+
+    test('an image that is a save only because no saves are declared is '
+        'still a thumbnail', () {
+      final statesOnly = SaveFilePatterns.fromJson({
+        'states': ['*.state'],
+      });
+
+      final kept = RomMSyncProvider.syncableSaves(game('Game.zip'), [
+        file('/s/Game.state'),
+        file('/s/Game.state.png'),
+      ], patterns: statesOnly);
+
+      expect(namesOf(kept), ['Game.state']);
     });
   });
 

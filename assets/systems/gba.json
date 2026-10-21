@@ -110,10 +110,8 @@
       "is_retroachievements_compatible": false,
       "save_files": {
         "saves": ["*.sav"],
-        "states": ["*.sgm"],
         "dirs": {
-          "saves": "saves",
-          "states": "saves"
+          "saves": "saves"
         }
       },
       "platforms": {
