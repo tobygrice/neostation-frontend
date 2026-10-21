@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../../models/core_emulator_model.dart';
 import '../../models/game_model.dart';
 import '../../models/system_model.dart';
@@ -33,10 +35,15 @@ class LaunchEmulatorResolver {
   /// [systemDefaults] memoises the system-level answer by system id, for a
   /// caller resolving many games in one pass: on Android the auto-resolved
   /// default asks the platform whether each emulator is installed.
+  ///
+  /// [installedDefaults] remembers just that auto-resolved default for a
+  /// while, for a caller resolving one game at a time. A launch passes
+  /// neither: it always asks afresh.
   static Future<LaunchEmulator> resolve(
     SystemModel system,
     GameModel game, {
     Map<String, Future<LaunchEmulator>>? systemDefaults,
+    InstalledDefaultCache? installedDefaults,
   }) {
     final perGame = game.emulatorName;
     if (perGame != null) {
@@ -46,13 +53,19 @@ class LaunchEmulatorResolver {
     }
     final systemId = system.id;
     if (systemDefaults == null || systemId == null) {
-      return _systemDefault(system);
+      return _systemDefault(system, installedDefaults);
     }
-    return systemDefaults.putIfAbsent(systemId, () => _systemDefault(system));
+    return systemDefaults.putIfAbsent(
+      systemId,
+      () => _systemDefault(system, installedDefaults),
+    );
   }
 
   /// The emulator [system]'s games launch in when they choose none.
-  static Future<LaunchEmulator> _systemDefault(SystemModel system) async {
+  static Future<LaunchEmulator> _systemDefault(
+    SystemModel system,
+    InstalledDefaultCache? installedDefaults,
+  ) async {
     final systemId = system.id;
     if (systemId == null) {
       return const LaunchEmulator(null, 'none', isExplicit: false);
@@ -66,7 +79,12 @@ class LaunchEmulatorResolver {
         isExplicit: true,
       );
     }
-    final defaultEmu = await _resolveDefaultInstalledEmulator(system);
+    final defaultEmu = installedDefaults == null
+        ? await _resolveDefaultInstalledEmulator(system)
+        : await installedDefaults._get(
+            systemId,
+            () => _resolveDefaultInstalledEmulator(system),
+          );
     if (defaultEmu != null) {
       return LaunchEmulator(
         defaultEmu.uniqueId,
@@ -79,12 +97,10 @@ class LaunchEmulatorResolver {
 
   /// Whether [uniqueId] is a RetroArch Core on this device.
   ///
-  /// Decided by the emulator's own row, which records whether it is standalone
-  /// the same way on every platform (a RetroArch package on Android, a
-  /// RetroArch executable on desktop). [CoreEmulatorModel.isRetroArch] is not
-  /// that test: it reads the Android package, so it is false for every
-  /// RetroArch Core on desktop. An id with no row on this device falls back to
-  /// the `.ra.`/`.ra32.`/`.ra64.` naming the system definitions follow.
+  /// Decided by the emulator's own row, by [CoreEmulatorModel.isRetroArchCore],
+  /// the same test Standalone Save Folders uses to leave cores out. An id with
+  /// no row on this device falls back to the `.ra.`/`.ra32.`/`.ra64.` naming
+  /// the system definitions follow.
   static Future<bool> isRetroArchCore(
     SystemModel system,
     String uniqueId,
@@ -95,7 +111,7 @@ class LaunchEmulatorResolver {
         systemId,
       );
       for (final e in emulators) {
-        if (e.uniqueId == uniqueId) return !e.isStandalone;
+        if (e.uniqueId == uniqueId) return e.isRetroArchCore;
       }
     }
     return CoreEmulatorModel.hasRetroArchCoreId(uniqueId);
@@ -165,5 +181,50 @@ class LaunchEmulatorResolver {
       if (e.isInstalled) return e;
     }
     return configured;
+  }
+}
+
+/// Remembers each system's auto-resolved default emulator for [maxAge].
+///
+/// Resolving it asks the platform whether each of the system's emulators is
+/// installed (a round trip per emulator on Android), which a caller syncing
+/// one game at a time would otherwise repeat for every game. Only that answer
+/// is kept: the user's own choices are a cheap read and can change at any
+/// moment. Install state changes outside the app, hence the short [maxAge].
+class InstalledDefaultCache {
+  /// How long an answer is trusted.
+  final Duration maxAge;
+
+  final DateTime Function() _now;
+  final _entries =
+      <String, ({DateTime at, Future<CoreEmulatorModel?> emulator})>{};
+
+  InstalledDefaultCache({
+    this.maxAge = const Duration(seconds: 30),
+    @visibleForTesting DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
+
+  /// Forgets every answer.
+  void clear() => _entries.clear();
+
+  Future<CoreEmulatorModel?> _get(
+    String systemId,
+    Future<CoreEmulatorModel?> Function() resolve,
+  ) {
+    final now = _now();
+    final entry = _entries[systemId];
+    if (entry != null && now.difference(entry.at) < maxAge) {
+      return entry.emulator;
+    }
+    final emulator = resolve();
+    _entries[systemId] = (at: now, emulator: emulator);
+    // A failure is not an answer: the next caller asks again.
+    emulator.catchError((Object _) {
+      if (identical(_entries[systemId]?.emulator, emulator)) {
+        _entries.remove(systemId);
+      }
+      return null;
+    });
+    return emulator;
   }
 }

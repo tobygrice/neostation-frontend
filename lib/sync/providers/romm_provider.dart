@@ -215,6 +215,11 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
 
   final Map<String, GameSyncState> _gameSyncStates = {};
 
+  /// Each system's auto-resolved default emulator, which a status check, a
+  /// pre-launch pass and a post-close sync of the same game would otherwise
+  /// each ask the platform for, emulator by emulator.
+  final _installedDefaults = InstalledDefaultCache();
+
   /// The connect-time link pass. Built from [_browse] and the repositories
   /// unless a test hands one in (a subclass recording [RommLibraryLinker.run]
   /// is enough to test the schedule without a server or a database).
@@ -364,17 +369,27 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
 
   /// Where [game]'s saves are, and those there that RomM may sync.
   ///
-  /// [systemDefaults] is [LaunchEmulatorResolver.resolve]'s memo, for a pass
-  /// over many games.
+  /// [pass] shares the work across a pass over many games.
   Future<_GameSaves> _gameSaves(
     GameModel game,
     SystemModel? system, {
-    Map<String, Future<LaunchEmulator>>? systemDefaults,
+    RommSaveLocationPass? pass,
   }) async {
+    // A system whose definition opts out of sync has nothing RomM may sync,
+    // which is what NeoSync's locator answers for its RetroArch saves. A
+    // Standalone Save Folder must not bring its files back.
+    if (system != null && !system.neosync.sync) {
+      return (
+        location: const RetroArchSaveLocation([]),
+        files: const <LocalSaveFile>[],
+        romExtensions: const <String>{},
+      );
+    }
     final location = await RommSaveLocation.resolve(
       game,
       system,
-      systemDefaults: systemDefaults,
+      pass: pass,
+      installedDefaults: _installedDefaults,
     );
     final romExtensions = _normalisedExtensions(system?.extensions ?? const []);
     final found = switch (location) {
@@ -1389,7 +1404,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       final localName = localNameForAsset(asset);
       final List<String> targets;
       if (location is StandaloneSaveLocation) {
-        final target = location.targetFor(
+        final target = await location.targetFor(
           localName,
           kind: SaveFileKind.of(isState: asset.isState),
           localFiles: localFiles,
@@ -1859,8 +1874,9 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     final listed = <_GameKey>{};
     var touched = false;
     // Most games launch in their system's default, which on Android takes a
-    // platform round trip per emulator to resolve. Once per system will do.
-    final systemDefaults = <String, Future<LaunchEmulator>>{};
+    // platform round trip per emulator to resolve, and share its Standalone
+    // Save Folder. Once per system, and per folder, will do.
+    final pass = RommSaveLocationPass();
     for (final game in await _listGames()) {
       // A disconnect (or a sign-out) mid-sweep ends it; every remaining game
       // would fail against a server we no longer have credentials for.
@@ -1881,7 +1897,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
           game.cloudSyncEnabled == true;
       if (sweepable) linked++;
       final check = sweepable
-          ? await _pendingUpload(game, systemDefaults: systemDefaults)
+          ? await _pendingUpload(game, pass: pass)
           : (pending: _Pending.none, saves: null);
       final pending = check.pending;
       if (pending == _Pending.none &&
@@ -1992,15 +2008,11 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   /// could not be read.
   Future<({_Pending pending, _GameSaves? saves})> _pendingUpload(
     GameModel game, {
-    Map<String, Future<LaunchEmulator>>? systemDefaults,
+    RommSaveLocationPass? pass,
   }) async {
     final _GameSaves saves;
     try {
-      saves = await _gameSaves(
-        game,
-        await _systemOf(game),
-        systemDefaults: systemDefaults,
-      );
+      saves = await _gameSaves(game, await _systemOf(game), pass: pass);
     } catch (e) {
       // Not worth a round trip to find out, and no reason to stop reporting a
       // save that failed before.

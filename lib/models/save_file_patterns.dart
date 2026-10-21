@@ -69,8 +69,15 @@ class SaveFilePatterns {
     return null;
   }
 
-  static bool _matchesAny(List<String> globs, String fileName) =>
-      globs.any((glob) => _globToRegExp(glob).hasMatch(fileName));
+  static bool _matchesAny(List<String> globs, String fileName) => globs.any(
+    (glob) => _compiled
+        .putIfAbsent(glob, () => _globToRegExp(glob))
+        .hasMatch(fileName),
+  );
+
+  /// Each glob compiled once, however many files it is matched against. The
+  /// system definitions hold only a handful.
+  static final Map<String, RegExp> _compiled = {};
 
   /// `*` matches any run of characters and `?` any one; everything else is
   /// literal. Matched against the whole file name, ignoring case.

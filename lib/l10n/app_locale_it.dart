@@ -1558,6 +1558,9 @@ const Map<String, dynamic> appLocaleIt = {
   AppLocale.removeCustomFolder: 'Rimuovi Cartella',
   AppLocale.removeCustomFolderConfirm:
       'Rimuovere questa cartella di salvataggio standalone? I file locali non verranno eliminati, solo scollegati dalla sincronizzazione.',
+  AppLocale.customSaveFolderReplace: 'Sostituisci cartella',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} ha già una cartella di salvataggio standalone: {path}. Sostituirla con quella scelta?',
   AppLocale.uploadingCustomFolder: 'Caricamento dei salvataggi da {folder}...',
   AppLocale.customFolderUploadComplete:
       'Cartella standalone sincronizzata: {uploaded} caricati, {skipped} già aggiornati',

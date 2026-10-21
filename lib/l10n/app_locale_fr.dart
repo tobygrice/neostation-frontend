@@ -1573,6 +1573,9 @@ const Map<String, dynamic> appLocaleFr = {
   AppLocale.removeCustomFolder: 'Supprimer le Dossier',
   AppLocale.removeCustomFolderConfirm:
       'Supprimer ce dossier de sauvegarde standalone ? Ses fichiers locaux ne seront pas supprimés, seulement déliés de la synchronisation.',
+  AppLocale.customSaveFolderReplace: 'Remplacer le dossier',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} a déjà un dossier de sauvegarde standalone : {path}. Le remplacer par celui choisi ?',
   AppLocale.uploadingCustomFolder:
       'Téléversement des sauvegardes de {folder}...',
   AppLocale.customFolderUploadComplete:

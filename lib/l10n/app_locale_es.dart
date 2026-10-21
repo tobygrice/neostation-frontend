@@ -1558,6 +1558,9 @@ const Map<String, dynamic> appLocaleEs = {
   AppLocale.removeCustomFolder: 'Eliminar Carpeta',
   AppLocale.removeCustomFolderConfirm:
       '¿Eliminar esta carpeta de guardado standalone? Sus archivos locales no se borrarán, solo se desvinculará de la sincronización.',
+  AppLocale.customSaveFolderReplace: 'Reemplazar carpeta',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} ya tiene una carpeta de guardado standalone: {path}. ¿Reemplazarla por la que elegiste?',
   AppLocale.uploadingCustomFolder: 'Subiendo guardados de {folder}...',
   AppLocale.customFolderUploadComplete:
       'Carpeta standalone sincronizada: {uploaded} subidos, {skipped} ya actualizados',

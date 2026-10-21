@@ -31,6 +31,7 @@ import 'package:neostation/sync/providers/romm_provider.dart';
 import 'package:neostation/sync/sync_manager.dart';
 import 'package:neostation/themes/corner_radii.dart';
 import 'package:neostation/utils/gamepad_translator.dart';
+import 'package:neostation/widgets/confirm_action_dialog.dart';
 import 'package:neostation/widgets/core_footer.dart' show GamepadControl;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1309,9 +1310,14 @@ void main() {
       expect(find.byType(CustomSaveFoldersView), findsOneWidget);
     });
 
-    /// Configures WatermelonDS's folder for the DS through the dialog.
-    Future<void> chooseFolder(WidgetTester tester) async {
-      CustomSaveFoldersView.debugPickFolder = () async => folder.path;
+    /// Configures [emulator]'s folder for the DS through the dialog, picking
+    /// the one [pick] answers, [folder] unless told otherwise.
+    Future<void> chooseFolder(
+      WidgetTester tester, {
+      String emulator = 'Standalone WatermelonDS',
+      Future<String?> Function()? pick,
+    }) async {
+      CustomSaveFoldersView.debugPickFolder = pick ?? () async => folder.path;
       await press(tester, LogicalKeyboardKey.keyY); // Configure
       await tester.tap(find.text('Pick a system'));
       await tester.pumpAndSettle();
@@ -1319,7 +1325,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Pick an emulator'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Standalone WatermelonDS').last);
+      await tester.tap(find.text(emulator).last);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Select folder'));
       await tester.pumpAndSettle();
@@ -1354,6 +1360,51 @@ void main() {
       await chooseFolder(tester);
 
       expect(notified(), contains('Failed to sync standalone folder'));
+    });
+
+    testWidgets('leaving the screen mid-upload still ends its notification', (
+      tester,
+    ) async {
+      await manager.setActive('romm', persist: (_) async {});
+      final upload = Completer<SyncResult>();
+      romm.retry = () => upload.future;
+      await pumpTab(tester);
+      await tester.tap(find.byKey(const ValueKey('save-folders')));
+      await tester.pumpAndSettle();
+      await chooseFolder(tester);
+
+      // Not settled: the tab spins while the upload runs.
+      await pastGrace(tester);
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byType(CustomSaveFoldersView), findsNothing);
+      upload.complete(const RommSweepResult(uploaded: 1, upToDate: 2));
+      await tester.pumpAndSettle();
+
+      expect(notified(), [
+        'Standalone folder synced: 1 uploaded, 2 already up to date',
+      ]);
+    });
+
+    testWidgets('the controller stays off the screen while the folder '
+        'picker is open', (tester) async {
+      var backs = 0;
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () => backs++));
+      final picking = Completer<String?>();
+
+      await chooseFolder(tester, pick: () => picking.future);
+      expect(find.byType(CustomSaveFoldersDialog), findsNothing);
+      await press(tester, LogicalKeyboardKey.backspace);
+      await press(tester, LogicalKeyboardKey.keyY);
+
+      expect(backs, 0);
+      expect(find.byType(CustomSaveFoldersDialog), findsNothing);
+      picking.complete(folder.path);
+      await tester.pumpAndSettle();
+      expect(find.text(folder.path), findsOneWidget);
+      await press(tester, LogicalKeyboardKey.backspace);
+      expect(backs, 1, reason: 'the screen has the controller back');
     });
 
     testWidgets('under NeoSync, choosing a folder leaves RomM alone', (
@@ -1607,6 +1658,61 @@ void main() {
       );
       expect(find.text('Nintendo DS / Standalone WatermelonDS'), findsNothing);
       expect(find.text(folder.path), findsOneWidget);
+    });
+
+    testWidgets('an edit onto an emulator with a folder of its own asks '
+        'before replacing it', (tester) async {
+      final adapter = await SqliteService.getDatabase();
+      await adapter.execute(
+        'INSERT INTO app_emulators (system_id, os_id, name, '
+        'unique_identifier, is_standalone, is_default) '
+        "VALUES ('ds', 1, 'Standalone DraStic', 'ds.standalone.drastic', 1, 0)",
+      );
+      final other = Directory.systemTemp.createTempSync('standalone_other');
+      addTearDown(() => other.deleteSync(recursive: true));
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+      await chooseFolder(tester);
+      await chooseFolder(
+        tester,
+        emulator: 'Standalone DraStic',
+        pick: () async => other.path,
+      );
+
+      /// Edits the highlighted DraStic row onto WatermelonDS.
+      Future<void> editOntoWatermelon() async {
+        await press(tester, LogicalKeyboardKey.enter); // edit
+        await tester.tap(find.byKey(const ValueKey('custom-folder-emulator')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Standalone WatermelonDS').last);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Select folder'));
+        await tester.pumpAndSettle();
+      }
+
+      await editOntoWatermelon();
+      expect(find.byType(ConfirmActionDialog), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(ConfirmActionDialog),
+          matching: find.textContaining(folder.path),
+        ),
+        findsOneWidget,
+      );
+      await press(tester, LogicalKeyboardKey.backspace); // cancel
+
+      expect(find.byType(ConfirmActionDialog), findsNothing);
+      expect(find.text('Nintendo DS / Standalone WatermelonDS'), findsOne);
+      expect(find.text('Nintendo DS / Standalone DraStic'), findsOne);
+      expect(find.text(folder.path), findsOneWidget);
+      expect(find.text(other.path), findsOneWidget);
+
+      await editOntoWatermelon();
+      await press(tester, LogicalKeyboardKey.enter); // replace
+
+      expect(find.text('Nintendo DS / Standalone WatermelonDS'), findsOne);
+      expect(find.text('Nintendo DS / Standalone DraStic'), findsNothing);
+      expect(find.text(other.path), findsOneWidget);
+      expect(find.text(folder.path), findsNothing);
     });
 
     testWidgets('Y configures a new folder even with one highlighted', (

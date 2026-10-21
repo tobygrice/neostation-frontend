@@ -121,7 +121,7 @@ When **Use RomM for save sync** is on, RomM uses the same Standalone Save Folder
 Only games downloaded from or linked to RomM are synced. For each one, NeoStation syncs only where the emulator it would launch the game with keeps its saves: the game's own emulator if you chose one, otherwise the system's default.
 
 - **RetroArch:** RetroArch's save and state folders, as before.
-- **A standalone emulator with a configured folder:** that folder. A newer save from another device, or from RomM's browser player, replaces your local file in place, so the emulator loads it next time.
+- **A standalone emulator with a configured folder:** that folder. A newer save from another device, or from RomM's browser player, replaces your local file in place, so the emulator loads it next time. A save this device has no copy of yet goes beside the game's other files of the same kind, otherwise beside the folder's other files with the same extension (another game's memory cards, for example), otherwise at the top of the folder. On a device where the emulator has saved nothing yet, select the exact folder it saves into rather than a parent. If files with the same name sit in different subfolders, only the most recently changed one syncs.
 - **A standalone emulator with no folder on this device:** nothing is synced, and the game shows the "emulator missing" status.
 
 Switching a game to another emulator stops syncing the old emulator's saves. They stay on RomM.

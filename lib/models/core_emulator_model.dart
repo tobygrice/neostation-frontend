@@ -56,11 +56,21 @@ class CoreEmulatorModel {
       androidPackageName != null &&
       androidPackageName!.startsWith(CoreEmulatorModel.retroArchPackagePrefix);
 
+  /// Whether this emulator is a RetroArch Core, on any platform: its row says
+  /// it is not standalone, or its id follows the RetroArch core naming. The id
+  /// is checked too because some cores are flagged standalone by mistake.
+  ///
+  /// Unlike [isRetroArch], which reads the Android package and so is false for
+  /// every core on desktop. Standalone Save Folders and RomM's save location
+  /// both decide by this, so a core can never be one the folders view hides
+  /// yet RomM expects a folder for.
+  bool get isRetroArchCore => !isStandalone || hasRetroArchCoreId(uniqueId);
+
   /// Whether [uniqueId] follows the `<system>.ra.<core>` naming (or `.ra32.` /
   /// `.ra64.`) that the system definitions give RetroArch cores.
   ///
-  /// A naming convention, not a verdict: prefer an emulator row's
-  /// [isStandalone] where there is one.
+  /// A naming convention, not a verdict: prefer [isRetroArchCore] where there
+  /// is an emulator row.
   static bool hasRetroArchCoreId(String uniqueId) {
     final lower = uniqueId.toLowerCase();
     return lower.contains('.ra.') ||

@@ -88,7 +88,11 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
       // controller from it. The folder picker it hands over to is modal too.
       GamepadNavigationManager.pushLayer(
         _layerId,
-        onActivate: () => _gamepadNav.activate(),
+        // Not once closing: a folder picker that returns before the exit
+        // animation ends hands the controller back to this layer.
+        onActivate: () {
+          if (!_closed) _gamepadNav.activate();
+        },
         onDeactivate: () => _gamepadNav.deactivate(),
         modal: true,
       );

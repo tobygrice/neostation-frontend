@@ -1330,6 +1330,9 @@ const Map<String, dynamic> appLocaleZh = {
   AppLocale.customSaveFolderInvalid: '所选文件夹不存在',
   AppLocale.removeCustomFolder: '移除文件夹',
   AppLocale.removeCustomFolderConfirm: '移除这个独立存档文件夹？本地文件不会被删除，只会从同步中移除。',
+  AppLocale.customSaveFolderReplace: '替换文件夹',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} 已有独立存档文件夹：{path}。要替换为所选文件夹吗？',
   AppLocale.uploadingCustomFolder: '正在上传 {folder} 中的存档...',
   AppLocale.customFolderUploadComplete:
       '独立文件夹已同步：已上传 {uploaded} 个，{skipped} 个已是最新',

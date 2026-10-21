@@ -1511,6 +1511,9 @@ const Map<String, dynamic> appLocaleRu = {
   AppLocale.removeCustomFolder: 'Удалить Папку',
   AppLocale.removeCustomFolderConfirm:
       'Удалить эту пользовательскую папку сохранений? Локальные файлы не будут удалены, только отключены от синхронизации.',
+  AppLocale.customSaveFolderReplace: 'Заменить папку',
+  AppLocale.customSaveFolderReplaceConfirm:
+      'У {name} уже есть пользовательская папка сохранений: {path}. Заменить её выбранной?',
   AppLocale.uploadingCustomFolder: 'Загрузка сохранений из {folder}...',
   AppLocale.customFolderUploadComplete:
       'Пользовательская папка синхронизирована: {uploaded} загружено, {skipped} уже актуальны',

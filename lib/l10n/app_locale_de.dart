@@ -1566,6 +1566,9 @@ const Map<String, dynamic> appLocaleDe = {
   AppLocale.removeCustomFolder: 'Ordner Entfernen',
   AppLocale.removeCustomFolderConfirm:
       'Diesen Standalone Speicherordner entfernen? Lokale Dateien werden nicht gelöscht, nur von der Synchronisierung entkoppelt.',
+  AppLocale.customSaveFolderReplace: 'Ordner ersetzen',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} hat bereits einen Standalone Speicherordner: {path}. Durch den gewählten ersetzen?',
   AppLocale.uploadingCustomFolder:
       'Spielstände aus {folder} werden hochgeladen...',
   AppLocale.customFolderUploadComplete:

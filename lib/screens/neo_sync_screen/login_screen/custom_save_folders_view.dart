@@ -15,13 +15,13 @@ import 'package:neostation/repositories/neosync_save_folder_repository.dart';
 import 'package:neostation/repositories/system_repository.dart';
 import 'package:neostation/services/permission_service.dart';
 import 'package:neostation/services/user_data_location_service.dart';
-import 'package:neostation/utils/cloud_path_builder.dart';
 import 'package:neostation/widgets/custom_notification.dart' as custom;
 import 'package:neostation/widgets/tv_directory_picker.dart';
 import 'package:neostation/widgets/core_footer.dart';
 import 'package:neostation/widgets/confirm_action_dialog.dart';
 import 'package:neostation/services/logger_service.dart';
 import 'package:neostation/services/gamepad/gamepad_navigation_manager.dart';
+import 'package:neostation/services/global_notification_service.dart';
 import '../../app_screen.dart';
 import 'custom_save_folders_panel.dart';
 import 'neo_sync_shared.dart';
@@ -88,9 +88,40 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
   @override
   void dispose() {
+    _releasePickerHold();
     GamepadNavigationManager.popLayer('neo_sync_custom_folders');
     _gamepadNav.dispose();
     super.dispose();
+  }
+
+  /// The layer that holds the controller while the folder picker is open.
+  static const _pickerHoldLayerId = 'neo_sync_custom_folders_picker';
+  bool _pickerHeld = false;
+
+  /// Keeps the controller off this view while a folder picker is open.
+  ///
+  /// The configure dialog closes before the picker opens, and popping its
+  /// layer would wake this view's navigator underneath a picker that has no
+  /// layer of its own (the native one on desktop), so B there would close the
+  /// view and A would open a second dialog. This modal layer, pushed while the
+  /// dialog's is still on top, is what its pop reactivates instead. It ignores
+  /// every press; a picker with a layer of its own goes on top of it.
+  void _holdForPicker() {
+    if (_pickerHeld) return;
+    _pickerHeld = true;
+    GamepadNavigationManager.pushLayer(
+      _pickerHoldLayerId,
+      onActivate: () {},
+      onDeactivate: () {},
+      modal: true,
+    );
+  }
+
+  /// Hands the controller back from [_holdForPicker].
+  void _releasePickerHold() {
+    if (!_pickerHeld) return;
+    _pickerHeld = false;
+    GamepadNavigationManager.popLayer(_pickerHoldLayerId);
   }
 
   void _initializeGamepad() {
@@ -206,13 +237,9 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
   /// Standalone folders target standalone emulators (ARMSX2, DuckStation, ...).
   /// RetroArch cores are discovered automatically from their saves dir, so they
-  /// must never be offered here — even if a core is mis-flagged as standalone,
-  /// its `retroarch.*` slug is the reliable tell.
-  static bool _isStandalone(CoreEmulatorModel e) =>
-      e.isStandalone &&
-      !CloudPathBuilder.slugFromEmulatorUniqueId(
-        e.uniqueId,
-      ).startsWith('retroarch.');
+  /// must never be offered here — even if a core is mis-flagged as standalone
+  /// (see [CoreEmulatorModel.isRetroArchCore]).
+  static bool _isStandalone(CoreEmulatorModel e) => !e.isRetroArchCore;
 
   /// The configured row's heading: the system's and emulator's names, or their
   /// identifiers for one this OS does not offer.
@@ -254,16 +281,27 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   /// [replacing] is the configured folder this edits, as `(system,
   /// emulatorUniqueId, path)`. An edit that moves it to another system or
   /// emulator removes the old entry, so the list keeps one row for it.
+  ///
+  /// Choosing a system and emulator that already have a different folder
+  /// replaces that one, so it asks first.
   Future<void> _selectFolderFor(
     String system,
     String emulatorSlug, {
     (String, String, String)? replacing,
   }) async {
     _log.i('CustomSaveFolder: picker start for $system / $emulatorSlug');
+    // Before the first await, while the configure dialog's layer is still on
+    // top: its pop must find this one above the view.
+    _holdForPicker();
     try {
-      var selected =
-          await (CustomSaveFoldersView.debugPickFolder?.call() ??
-              _pickFolder(initialDirectory: replacing?.$3));
+      String? selected;
+      try {
+        selected =
+            await (CustomSaveFoldersView.debugPickFolder?.call() ??
+                _pickFolder(initialDirectory: replacing?.$3));
+      } finally {
+        _releasePickerHold();
+      }
 
       if (selected == null || !mounted) return;
       selected = selected.replaceFirst(RegExp(r'[\\/]+$'), '');
@@ -276,6 +314,15 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
             type: custom.NotificationType.error,
           );
         }
+        return;
+      }
+
+      if (!await _confirmReplace(
+        system,
+        emulatorSlug,
+        folderPath,
+        replacing: replacing,
+      )) {
         return;
       }
 
@@ -299,29 +346,35 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       );
       if (saved != -1) setState(() => _selectedFolderIndex = saved);
 
-      final folderLabel = path.basename(folderPath);
+      // Resolved now: the user may leave the view while the upload runs, and
+      // the notification it started must still end.
+      final _UploadMessages messages = (
+        uploading: AppLocale.uploadingCustomFolder
+            .getString(context)
+            .replaceFirst('{folder}', path.basename(folderPath)),
+        complete: AppLocale.customFolderUploadComplete.getString(context),
+        failed: AppLocale.customFolderUploadFailed.getString(context),
+      );
       final upload = widget.uploadSystemSaves;
       setState(() => _syncing = true);
       try {
         final counts = upload != null
-            ? await _uploadWith(upload, system, folderLabel)
-            : await _uploadToNeoSync(system, emulatorSlug, folderLabel);
-        if (!mounted) return;
+            ? await _uploadWith(upload, system, messages)
+            : await _uploadToNeoSync(system, emulatorSlug, messages);
         if (counts == null) {
-          _showUpload(
-            AppLocale.customFolderUploadFailed.getString(context),
-            custom.NotificationType.error,
-          );
+          _showUpload(messages.failed, custom.NotificationType.error);
         } else {
           _showUpload(
-            AppLocale.customFolderUploadComplete
-                .getString(context)
+            messages.complete
                 .replaceFirst('{uploaded}', '${counts.uploaded}')
                 .replaceFirst('{skipped}', '${counts.upToDate}'),
             custom.NotificationType.success,
             progress: 1,
           );
         }
+      } catch (e, st) {
+        _log.e('CustomSaveFolder: upload failed', error: e, stackTrace: st);
+        _showUpload(messages.failed, custom.NotificationType.error);
       } finally {
         if (mounted) setState(() => _syncing = false);
       }
@@ -339,6 +392,40 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
         );
       }
     }
+  }
+
+  /// Whether saving [folderPath] for [system] and [emulatorSlug] may go ahead:
+  /// straight away unless it would replace a different folder already
+  /// configured for them, other than the one being edited ([replacing]), in
+  /// which case the user is asked.
+  Future<bool> _confirmReplace(
+    String system,
+    String emulatorSlug,
+    String folderPath, {
+    (String, String, String)? replacing,
+  }) async {
+    final existing = _configured
+        .where((c) => c.$1 == system && c.$2 == emulatorSlug)
+        .firstOrNull;
+    if (existing == null ||
+        existing == replacing ||
+        path.equals(existing.$3, folderPath)) {
+      return true;
+    }
+    _gamepadNav.deactivate();
+    final confirmed = await ConfirmActionDialog.show(
+      context,
+      title: AppLocale.customSaveFolderReplace.getString(context),
+      body: AppLocale.customSaveFolderReplaceConfirm
+          .getString(context)
+          .replaceFirst('{name}', _folderHeading(system, emulatorSlug))
+          .replaceFirst('{path}', existing.$3),
+      confirmLabel: AppLocale.customSaveFolderReplace.getString(context),
+      cancelLabel: AppLocale.cancel.getString(context),
+      icon: Symbols.folder_special_rounded,
+    );
+    if (mounted) _gamepadNav.activate();
+    return confirmed && mounted;
   }
 
   /// The folder the user picks, as a real path, or null if they pick none.
@@ -370,43 +457,42 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
   /// Shows [message] in the folder upload's notification in the app's
   /// notification centre (header bell), replacing what it said before.
+  ///
+  /// Needs no context, so the upload can end its notification after the user
+  /// has left this view.
   void _showUpload(
     String message,
     custom.NotificationType type, {
     double? progress,
     bool ongoing = false,
-  }) => custom.AppNotification.showNotification(
-    context,
-    message,
-    type: type,
-    notificationId: _uploadNotificationId,
+  }) => GlobalNotificationService().show(
+    id: _uploadNotificationId,
+    message: message,
+    type: switch (type) {
+      custom.NotificationType.info => GlobalNotificationType.info,
+      custom.NotificationType.success => GlobalNotificationType.success,
+      custom.NotificationType.error => GlobalNotificationType.error,
+    },
     progress: progress,
     ongoing: ongoing,
   );
-
-  /// The upload's progress message for [folderLabel].
-  String _uploadingMessage(String folderLabel) => AppLocale
-      .uploadingCustomFolder
-      .getString(context)
-      .replaceFirst('{folder}', folderLabel);
 
   /// Uploads the folder's existing saves to NeoSync, showing its progress.
   Future<SaveFolderUploadCounts?> _uploadToNeoSync(
     String system,
     String emulatorSlug,
-    String folderLabel,
+    _UploadMessages messages,
   ) async {
     final provider = context.read<NeoSyncProvider>();
     _showUpload(
-      _uploadingMessage(folderLabel),
+      messages.uploading,
       custom.NotificationType.info,
       progress: 0,
       ongoing: true,
     );
     void listener() {
-      if (!mounted) return;
       _showUpload(
-        _uploadingMessage(folderLabel),
+        messages.uploading,
         custom.NotificationType.info,
         progress: provider.syncProgress,
         ongoing: true,
@@ -427,10 +513,10 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   Future<SaveFolderUploadCounts?> _uploadWith(
     Future<SaveFolderUploadCounts?> Function(String system) upload,
     String system,
-    String folderLabel,
+    _UploadMessages messages,
   ) {
     _showUpload(
-      _uploadingMessage(folderLabel),
+      messages.uploading,
       custom.NotificationType.info,
       ongoing: true,
     );
@@ -686,3 +772,6 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     );
   }
 }
+
+/// What a folder's upload notification says, resolved before the upload runs.
+typedef _UploadMessages = ({String uploading, String complete, String failed});

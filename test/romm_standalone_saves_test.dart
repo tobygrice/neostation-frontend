@@ -11,6 +11,8 @@ import 'package:neostation/models/romm_asset.dart';
 import 'package:neostation/providers/neo_sync_provider.dart';
 import 'package:neostation/providers/romm_provider.dart';
 import 'package:neostation/repositories/romm_save_map_repository.dart';
+import 'package:neostation/repositories/system_repository.dart';
+import 'package:neostation/services/game/launch_emulator_resolver.dart';
 import 'package:neostation/services/launcher_service.dart';
 import 'package:neostation/services/neosync/neo_sync_service.dart';
 import 'package:neostation/services/romm_service.dart';
@@ -824,6 +826,128 @@ void main() {
       expect(result.success, isTrue);
       expect(server.uploads, isEmpty);
       expect(withRetroArch.uploadFailures.value.isEmpty, isTrue);
+    });
+  });
+
+  group('a RetroArch Core flagged standalone by mistake', () {
+    const misflagged = 'ds.ra.desmume';
+
+    test('still syncs RetroArch\'s copy, as the folders view leaves it out '
+        'of Standalone Save Folders', () async {
+      await addEmulator(misflagged, standalone: true);
+      write(retroArch.saves, 'Game.srm', 'RETROARCH');
+
+      await withRetroArch.syncGameSavesAfterClose(
+        _game('Game.nds', emulator: misflagged),
+      );
+
+      expect(server.uploads.map((u) => u.name), ['Game.srm']);
+      expect(
+        withRetroArch.getGameSyncState('Game.nds')?.status,
+        isNot(GameSyncStatus.missingEmulator),
+      );
+    });
+  });
+
+  group('a system whose definition opts out of sync', () {
+    setUp(() async {
+      await db.execute(
+        "UPDATE app_systems SET neosync_json = '{\"sync\": false}' "
+        "WHERE id = 'ds'",
+      );
+      write(watermelonDir, 'Game.srm', 'DS SAVE');
+      library = [_game('Game.nds', emulator: _watermelon)];
+    });
+
+    test('has nothing waiting in its Standalone Save Folder, and the retry '
+        'counts nothing as uploaded', () async {
+      final result = await provider.retryPendingUploads(systemFolder: 'ds');
+
+      expect(result, isA<RommSweepResult>());
+      expect((result as RommSweepResult).uploaded, 0);
+      expect(result.upToDate, 0);
+      expect(server.uploads, isEmpty);
+    });
+  });
+
+  group('files of the same name in different subfolders', () {
+    test('only the most recently modified one syncs', () async {
+      write(
+        watermelonDir,
+        p.join('old', 'Game.srm'),
+        'OLD',
+      ).setLastModifiedSync(DateTime.now().subtract(const Duration(days: 1)));
+      write(watermelonDir, p.join('new', 'Game.srm'), 'NEW');
+
+      await provider.syncGameSavesAfterClose(
+        _game('Game.nds', emulator: _watermelon),
+      );
+
+      expect(server.uploads.map((u) => u.name), ['Game.srm']);
+      final asset = server.savesByRom[1]!.single;
+      expect(
+        String.fromCharCodes(server.contentByPath[asset.downloadPath]!),
+        'NEW',
+      );
+    });
+  });
+
+  group('a server-only save with no local file of its kind', () {
+    test('lands beside the folder\'s other files with its extension, where '
+        'the emulator keeps them', () async {
+      final cards = Directory(p.join(watermelonDir.path, 'memcards'));
+      write(cards, 'Other.srm', 'ANOTHER GAME');
+      server.seed(1, 'Game [2026-10-20_10-00-00].srm', 'REMOTE'.codeUnits);
+
+      await provider.syncGameSavesBeforeLaunch(
+        _game('Game.nds', emulator: _watermelon),
+      );
+
+      expect(File(p.join(cards.path, 'Game.srm')).readAsStringSync(), 'REMOTE');
+      expect(
+        File(p.join(watermelonDir.path, 'Game.srm')).existsSync(),
+        isFalse,
+      );
+    });
+  });
+
+  group('the remembered auto-resolved default', () {
+    Future<void> setAppDefault(String emulator) => db.execute(
+      'UPDATE app_emulators SET is_default = '
+      'CASE unique_identifier WHEN ? THEN 1 ELSE 0 END',
+      [emulator],
+    );
+
+    test('is reused until it expires, while the user\'s own default is always '
+        'read afresh', () async {
+      var now = DateTime(2026, 10, 21);
+      final cache = InstalledDefaultCache(
+        maxAge: const Duration(seconds: 30),
+        now: () => now,
+      );
+      final system = (await SystemRepository.getSystemByFolderName('ds'))!;
+      Future<String?> launchEmulator() async =>
+          (await LaunchEmulatorResolver.resolve(
+            system,
+            _game('Game.nds'),
+            installedDefaults: cache,
+          )).uniqueId;
+
+      expect(await launchEmulator(), _raMelon);
+
+      await setAppDefault(_watermelon);
+      now = now.add(const Duration(seconds: 10));
+      expect(await launchEmulator(), _raMelon, reason: 'still remembered');
+
+      now = now.add(const Duration(seconds: 30));
+      expect(await launchEmulator(), _watermelon, reason: 'expired');
+
+      await db.execute(
+        'INSERT INTO user_emulator_config '
+        '(emulator_unique_id, emulator_path, is_user_default) VALUES (?, ?, 1)',
+        [_drastic, ''],
+      );
+      expect(await launchEmulator(), _drastic);
     });
   });
 }

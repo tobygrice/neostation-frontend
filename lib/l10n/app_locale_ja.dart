@@ -1372,6 +1372,9 @@ const Map<String, dynamic> appLocaleJa = {
   AppLocale.removeCustomFolder: 'フォルダーを削除',
   AppLocale.removeCustomFolderConfirm:
       'このスタンドアロンセーブフォルダーを削除しますか？ローカルファイルは削除されず、同期から外れるだけです。',
+  AppLocale.customSaveFolderReplace: 'フォルダーを置き換え',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} にはすでにスタンドアロンセーブフォルダーがあります：{path}。選択したフォルダーに置き換えますか？',
   AppLocale.uploadingCustomFolder: '{folder} からセーブをアップロード中...',
   AppLocale.customFolderUploadComplete:
       'スタンドアロンフォルダーを同期しました：{uploaded}件アップロード、{skipped}件は既に最新',

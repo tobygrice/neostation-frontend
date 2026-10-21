@@ -71,15 +71,8 @@ extension NeoSyncPathResolver on NeoSyncProvider {
 
   /// Returns the custom folder root from [folders] that contains [filePath],
   /// preferring the most specific (longest) root, or null when none matches.
-  String? customRootForPath(Map<String, String> folders, String filePath) {
-    String? best;
-    for (final root in folders.values) {
-      if (path.equals(root, filePath) || path.isWithin(root, filePath)) {
-        if (best == null || root.length > best.length) best = root;
-      }
-    }
-    return best;
-  }
+  String? customRootForPath(Map<String, String> folders, String filePath) =>
+      saveFolderContaining(folders.values, filePath);
 
   /// Resolves an absolute local file into the NeoSync v2 custom-folder metadata
   /// used by uploads: the on-disk path relative to the custom folder root, the

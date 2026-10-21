@@ -12,6 +12,19 @@ import '../services/launcher_service.dart';
 import '../utils/safe_path.dart';
 import '../utils/save_file_walk.dart';
 
+/// What resolving many games' save locations in one pass can share.
+///
+/// Each system's default Launch Emulator is resolved once, and each system and
+/// emulator's location once, so its Standalone Save Folder is walked once for
+/// every game that launches in it rather than once per game. Meant for a
+/// single pass: what it remembers goes stale as the folders change.
+class RommSaveLocationPass {
+  /// [LaunchEmulatorResolver.resolve]'s memo.
+  final systemDefaults = <String, Future<LaunchEmulator>>{};
+
+  final _locations = <(String, String?), Future<RommSaveLocation>>{};
+}
+
 /// Where a game's saves are on this device under RomM: wherever its Launch
 /// Emulator keeps them, and nowhere else.
 ///
@@ -26,22 +39,39 @@ sealed class RommSaveLocation {
   /// The location for [game] on [system], or RetroArch's when either is
   /// unknown, which is how RomM sync behaved before it followed the emulator.
   ///
-  /// [systemDefaults] is [LaunchEmulatorResolver.resolve]'s memo, for a pass
-  /// over many games.
+  /// [pass] shares the work across a pass over many games, and
+  /// [installedDefaults] the auto-resolved default emulator across separate
+  /// calls (see [LaunchEmulatorResolver.resolve]).
   static Future<RommSaveLocation> resolve(
     GameModel game,
     SystemModel? system, {
-    Map<String, Future<LaunchEmulator>>? systemDefaults,
+    RommSaveLocationPass? pass,
+    InstalledDefaultCache? installedDefaults,
   }) async {
     if (system == null) return const RetroArchSaveLocation([]);
-    final folders = await NeoSyncSaveFolderRepository.getFoldersForSystem(
-      system.folderName,
-    );
     final emulator = (await LaunchEmulatorResolver.resolve(
       system,
       game,
-      systemDefaults: systemDefaults,
+      systemDefaults: pass?.systemDefaults,
+      installedDefaults: installedDefaults,
     )).uniqueId;
+    if (pass == null) return _forEmulator(system, emulator, shared: false);
+    return pass._locations.putIfAbsent((
+      system.folderName,
+      emulator,
+    ), () => _forEmulator(system, emulator, shared: true));
+  }
+
+  /// The location of [system]'s saves made by [emulator], [shared] by the
+  /// games of a pass.
+  static Future<RommSaveLocation> _forEmulator(
+    SystemModel system,
+    String? emulator, {
+    required bool shared,
+  }) async {
+    final folders = await NeoSyncSaveFolderRepository.getFoldersForSystem(
+      system.folderName,
+    );
     if (emulator == null ||
         emulator.isEmpty ||
         await LaunchEmulatorResolver.isRetroArchCore(system, emulator)) {
@@ -59,6 +89,7 @@ sealed class RommSaveLocation {
         system.folderName,
         emulator,
       ),
+      walkOnce: shared,
     );
   }
 }
@@ -74,9 +105,8 @@ final class RetroArchSaveLocation extends RommSaveLocation {
   const RetroArchSaveLocation(this.standaloneFolders);
 
   /// Whether [filePath] lies in one of [standaloneFolders].
-  bool isInStandaloneFolder(String filePath) => standaloneFolders.any(
-    (root) => path.equals(root, filePath) || path.isWithin(root, filePath),
-  );
+  bool isInStandaloneFolder(String filePath) =>
+      saveFolderContaining(standaloneFolders, filePath) != null;
 }
 
 /// A standalone emulator with a Standalone Save Folder on this device.
@@ -85,61 +115,105 @@ final class StandaloneSaveLocation extends RommSaveLocation {
   final String root;
   final SaveFilePatterns patterns;
 
-  const StandaloneSaveLocation({
+  /// Whether [list] walks the whole folder once and answers every game from
+  /// that, for a location a pass shares among its games. Otherwise each call
+  /// walks it for one game's files, which stats far fewer of a large folder's.
+  final bool walkOnce;
+
+  StandaloneSaveLocation({
     required this.emulator,
     required this.root,
     required this.patterns,
+    this.walkOnce = false,
   });
+
+  /// Every file in the folder that could be a save, walked at most once for
+  /// this location.
+  late final Future<List<String>> _allPaths = listSaveFilePaths([root]);
 
   /// The files in the folder whose names start with [romName], however deep,
   /// each tagged `saves/` or `states/` by [patterns]. Files the patterns
   /// claim for neither are left out.
   ///
-  /// Only a prefix is checked here, case-insensitively, to keep the walk cheap
-  /// on a large folder; the caller applies the full name rule.
+  /// Only a prefix is checked here, case-insensitively; the caller applies the
+  /// full name rule.
+  ///
+  /// A RomM Asset is paired with a local file by name alone, so of several
+  /// files with the same name in different subfolders only the most recently
+  /// modified, the likeliest to be the one the emulator uses, is listed.
+  /// Otherwise each would be compared against, and uploaded over, the same
+  /// asset.
   Future<List<LocalSaveFile>> list(String romName, String gameName) async {
-    final paths = await listSaveFilePaths([root], namePrefix: romName);
-    final found = <LocalSaveFile>[];
+    final prefix = romName.toLowerCase();
+    final paths = walkOnce
+        ? [
+            for (final p in await _allPaths)
+              if (path.basename(p).toLowerCase().startsWith(prefix)) p,
+          ]
+        : await listSaveFilePaths([root], namePrefix: romName);
+    final byName = <String, LocalSaveFile>{};
     for (final filePath in paths) {
-      final kind = patterns.classify(path.basename(filePath));
+      final name = path.basename(filePath);
+      final kind = patterns.classify(name);
       if (kind == null) continue;
       final stat = await File(filePath).stat();
+      final kept = byName[name];
+      if (kept != null && !stat.modified.isAfter(kept.lastModified)) continue;
       final relative = path
           .relative(filePath, from: root)
           .replaceAll('\\', '/');
-      found.add(
-        LocalSaveFile(
-          filePath: filePath,
-          fileName: path.basename(filePath),
-          fileSize: stat.size,
-          lastModified: stat.modified,
-          gameName: gameName,
-          isSynced: false,
-          relativePath: '${kind.root}/$relative',
-        ),
+      byName[name] = LocalSaveFile(
+        filePath: filePath,
+        fileName: name,
+        fileSize: stat.size,
+        lastModified: stat.modified,
+        gameName: gameName,
+        isSynced: false,
+        relativePath: '${kind.root}/$relative',
       );
     }
-    return found;
+    return byName.values.toList();
   }
 
   /// Where a RomM Asset named [localName] goes: over the local file of the same
   /// kind and name when there is one, otherwise beside the game's other files
-  /// of that kind, otherwise at the folder root. Null when the result would
-  /// leave the folder.
-  String? targetFor(
+  /// of that kind, otherwise beside the folder's other files with its
+  /// extension (another game's memory cards, say), otherwise at the folder
+  /// root. Null when the result would leave the folder.
+  Future<String?> targetFor(
     String localName, {
     required SaveFileKind kind,
     required List<LocalSaveFile> localFiles,
-  }) {
+  }) async {
     final prefix = '${kind.root}/';
     final sameKind = localFiles.where((f) => f.relativePath.startsWith(prefix));
     for (final f in sameKind) {
       if (path.basename(f.filePath) == localName) return f.filePath;
     }
-    final dir = sameKind.isEmpty ? root : path.dirname(sameKind.first.filePath);
+    final dir = sameKind.isEmpty
+        ? await _dirOfExtension(path.extension(localName)) ?? root
+        : path.dirname(sameKind.first.filePath);
     final target = safeJoin(dir, localName);
     if (target == null) return null;
     return path.isWithin(root, target) ? target : null;
+  }
+
+  /// The directory in the folder holding the most files with [extension], or
+  /// null when none has one.
+  Future<String?> _dirOfExtension(String extension) async {
+    if (extension.isEmpty) return null;
+    final lower = extension.toLowerCase();
+    final counts = <String, int>{};
+    for (final p in await _allPaths) {
+      if (path.extension(p).toLowerCase() != lower) continue;
+      final dir = path.dirname(p);
+      counts[dir] = (counts[dir] ?? 0) + 1;
+    }
+    String? best;
+    for (final MapEntry(key: dir, value: count) in counts.entries) {
+      if (best == null || count > counts[best]!) best = dir;
+    }
+    return best;
   }
 }
 

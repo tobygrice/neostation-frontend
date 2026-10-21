@@ -105,11 +105,14 @@ class LauncherService {
 
   /// [getSaveFilePatterns], loading the system's definition first when it has
   /// not been yet. [systemId] is also the definition's file name.
+  ///
+  /// Only a definition not loaded at all is read: one that is loaded but does
+  /// not name [uniqueId] would answer the same after reading it again.
   Future<SaveFilePatterns> loadSaveFilePatterns(
     String systemId,
     String uniqueId,
   ) async {
-    if (getPlayerConfig(systemId, uniqueId) == null) {
+    if (!_configs.containsKey(systemId)) {
       await loadSystemConfig('$systemId.json');
     }
     return getSaveFilePatterns(systemId, uniqueId);

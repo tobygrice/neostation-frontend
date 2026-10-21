@@ -7,6 +7,23 @@ import 'package:path/path.dart' as path;
 /// holds ROMs from hashing disc images.
 const int maxSaveFileSize = 10 * 1024 * 1024;
 
+/// The folder of [folders] that holds [filePath], or [filePath] itself if it
+/// is one, preferring the most specific (longest) when they nest; null when
+/// none does.
+///
+/// The one test of "is this file in a Standalone Save Folder", shared by
+/// NeoSync, which files it under that folder, and RomM, which keeps RetroArch
+/// games out of it.
+String? saveFolderContaining(Iterable<String> folders, String filePath) {
+  String? best;
+  for (final root in folders) {
+    if (path.equals(root, filePath) || path.isWithin(root, filePath)) {
+      if (best == null || root.length > best.length) best = root;
+    }
+  }
+  return best;
+}
+
 /// Every file under [folders], however deep, that could be a save, walked off
 /// the UI isolate. NeoSync recovery backups (`*.neosync.bak`) and files over
 /// [maxSaveFileSize] are left out.

@@ -1539,6 +1539,9 @@ const Map<String, dynamic> appLocalePt = {
   AppLocale.removeCustomFolder: 'Remover Pasta',
   AppLocale.removeCustomFolderConfirm:
       'Remover esta pasta de save standalone? Os arquivos locais não serão excluídos, apenas desvinculados da sincronização.',
+  AppLocale.customSaveFolderReplace: 'Substituir pasta',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} já tem uma pasta de save standalone: {path}. Substituí-la pela que você escolheu?',
   AppLocale.uploadingCustomFolder: 'Enviando saves de {folder}...',
   AppLocale.customFolderUploadComplete:
       'Pasta standalone sincronizada: {uploaded} enviados, {skipped} já atualizados',

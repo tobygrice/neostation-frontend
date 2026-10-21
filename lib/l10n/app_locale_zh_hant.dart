@@ -1332,6 +1332,9 @@ const Map<String, dynamic> appLocaleZhHant = {
   AppLocale.customSaveFolderInvalid: '所選資料夾不存在',
   AppLocale.removeCustomFolder: '移除資料夾',
   AppLocale.removeCustomFolderConfirm: '移除這個獨立存檔資料夾？本機檔案不會被刪除，只會從同步中移除。',
+  AppLocale.customSaveFolderReplace: '取代資料夾',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} 已有獨立存檔資料夾：{path}。要取代為所選資料夾嗎？',
   AppLocale.uploadingCustomFolder: '正在上傳 {folder} 中的存檔...',
   AppLocale.customFolderUploadComplete:
       '獨立資料夾已同步：已上傳 {uploaded} 個，{skipped} 個已是最新',

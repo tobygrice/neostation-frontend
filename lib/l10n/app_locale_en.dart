@@ -1494,6 +1494,9 @@ const Map<String, dynamic> appLocaleEn = {
   AppLocale.removeCustomFolder: 'Remove Folder',
   AppLocale.removeCustomFolderConfirm:
       'Remove this standalone save folder? Its local files will not be deleted, only unlinked from sync.',
+  AppLocale.customSaveFolderReplace: 'Replace Folder',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} already has a standalone save folder: {path}. Replace it with the one you picked?',
   AppLocale.uploadingCustomFolder: 'Uploading saves from {folder}...',
   AppLocale.customFolderUploadComplete:
       'Standalone folder synced: {uploaded} uploaded, {skipped} already up to date',

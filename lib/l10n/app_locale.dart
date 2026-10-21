@@ -1595,6 +1595,9 @@ mixin AppLocale {
   static const String removeCustomFolder = 'remove_custom_folder';
   static const String removeCustomFolderConfirm =
       'remove_custom_folder_confirm';
+  static const String customSaveFolderReplace = 'custom_save_folder_replace';
+  static const String customSaveFolderReplaceConfirm =
+      'custom_save_folder_replace_confirm';
   static const String uploadingCustomFolder = 'uploading_custom_folder';
   static const String customFolderUploadComplete =
       'custom_folder_upload_complete';

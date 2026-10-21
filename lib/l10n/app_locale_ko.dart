@@ -1364,6 +1364,9 @@ const Map<String, dynamic> appLocaleKo = {
   AppLocale.removeCustomFolder: '폴더 제거',
   AppLocale.removeCustomFolderConfirm:
       '이 독립형 세이브 폴더를 제거하시겠습니까? 로컬 파일은 삭제되지 않고 동기화에서만 분리됩니다.',
+  AppLocale.customSaveFolderReplace: '폴더 교체',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name}에는 이미 독립형 세이브 폴더가 있습니다: {path}. 선택한 폴더로 교체하시겠습니까?',
   AppLocale.uploadingCustomFolder: '{folder}에서 세이브 업로드 중...',
   AppLocale.customFolderUploadComplete:
       '독립형 폴더 동기화 완료: {uploaded}개 업로드, {skipped}개는 이미 최신',

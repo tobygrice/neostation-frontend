@@ -1520,6 +1520,9 @@ const Map<String, dynamic> appLocaleId = {
   AppLocale.removeCustomFolder: 'Hapus Folder',
   AppLocale.removeCustomFolderConfirm:
       'Hapus folder simpanan standalone ini? File lokal tidak akan dihapus, hanya dilepas dari sinkronisasi.',
+  AppLocale.customSaveFolderReplace: 'Ganti Folder',
+  AppLocale.customSaveFolderReplaceConfirm:
+      '{name} sudah memiliki folder simpanan standalone: {path}. Ganti dengan yang Anda pilih?',
   AppLocale.uploadingCustomFolder: 'Mengunggah simpanan dari {folder}...',
   AppLocale.customFolderUploadComplete:
       'Folder standalone disinkronkan: {uploaded} diunggah, {skipped} sudah terbaru',
