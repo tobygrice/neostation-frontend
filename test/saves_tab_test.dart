@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -30,6 +31,7 @@ import 'package:neostation/services/sfx_service.dart';
 import 'package:neostation/sync/providers/romm_provider.dart';
 import 'package:neostation/sync/sync_manager.dart';
 import 'package:neostation/themes/corner_radii.dart';
+import 'package:neostation/themes/light_theme.dart';
 import 'package:neostation/utils/gamepad_translator.dart';
 import 'package:neostation/widgets/confirm_action_dialog.dart';
 import 'package:neostation/widgets/core_footer.dart' show GamepadControl;
@@ -127,6 +129,7 @@ void main() {
     double textScale = 1,
     Widget tab = const SavesTab(),
     bool settle = true,
+    ThemeData? theme,
   }) async {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -142,13 +145,15 @@ void main() {
           localizationsDelegates:
               FlutterLocalization.instance.localizationsDelegates,
           supportedLocales: FlutterLocalization.instance.supportedLocales,
-          theme: ThemeData(
-            extensions: [CornerRadii.m()],
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xff6258ff),
-              brightness: Brightness.dark,
-            ),
-          ),
+          theme:
+              theme ??
+              ThemeData(
+                extensions: [CornerRadii.m()],
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: const Color(0xff6258ff),
+                  brightness: Brightness.dark,
+                ),
+              ),
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(
               context,
@@ -1525,6 +1530,97 @@ void main() {
       expect(find.byType(CustomSaveFoldersView), findsOneWidget);
     });
 
+    testWidgets('the pickers and their menus read in a light theme', (
+      tester,
+    ) async {
+      await pumpTab(
+        tester,
+        theme: lightTheme,
+        tab: CustomSaveFoldersView(onBack: () {}),
+      );
+      final scheme = lightTheme.colorScheme;
+
+      await press(tester, LogicalKeyboardKey.keyY); // Configure
+      await tester.tap(find.text('Pick a system'));
+      await tester.pumpAndSettle();
+
+      final picker = tester.widget<DropdownButton<String>>(
+        find.descendant(
+          of: find.byKey(const ValueKey('custom-folder-system')),
+          matching: find.byType(DropdownButton<String>),
+        ),
+      );
+      expect(picker.dropdownColor, scheme.surface);
+      final entry = tester.renderObject<RenderParagraph>(
+        find.text('Nintendo DS (ds)').last,
+      );
+      expect(entry.text.style?.color, scheme.onSurface);
+
+      await tester.tap(find.text('Nintendo DS (ds)').last);
+      await tester.pumpAndSettle();
+      final shown = tester.renderObject<RenderParagraph>(
+        find.text('Nintendo DS (ds)'),
+      );
+      expect(shown.text.style?.color, scheme.onSurface);
+    });
+
+    // A menu entry draws its focus only in traditional highlight mode, which
+    // the controller, unlike a keyboard, never switches to on its own.
+    testWidgets('a menu the controller drives shows the entry it is on, and '
+        'the dialog puts the highlight strategy back', (tester) async {
+      final before = FocusManager.instance.highlightStrategy;
+      addTearDown(() => FocusManager.instance.highlightStrategy = before);
+      await addSnes();
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+      Future<void> push(String button) async {
+        await pastGrace(tester);
+        await send(tester, button, 0, type: 'button');
+        await tester.pump();
+        await send(tester, button, 1, type: 'button');
+        await tester.pumpAndSettle();
+      }
+
+      await push('KEYCODE_BUTTON_Y'); // Configure
+      await push('KEYCODE_BUTTON_A'); // open the systems
+      await push('KEYCODE_DPAD_DOWN');
+
+      expect(
+        FocusManager.instance.highlightMode,
+        FocusHighlightMode.traditional,
+      );
+      final focused = FocusManager.instance.primaryFocus!.context!;
+      expect(
+        find.descendant(
+          of: find.byElementPredicate((e) => e == focused),
+          matching: find.text(
+            'Super Nintendo Entertainment System Hacks and Homebrew (snes)',
+          ),
+        ),
+        findsOneWidget,
+        reason: 'the SNES entry has the focus',
+      );
+
+      await push('KEYCODE_BUTTON_B'); // the menu
+      await push('KEYCODE_BUTTON_B'); // the dialog
+      expect(find.byType(CustomSaveFoldersDialog), findsNothing);
+      expect(FocusManager.instance.highlightStrategy, before);
+    });
+
+    testWidgets('a menu opened by touch leaves the highlight strategy alone', (
+      tester,
+    ) async {
+      final before = FocusManager.instance.highlightStrategy;
+      addTearDown(() => FocusManager.instance.highlightStrategy = before);
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+      await press(tester, LogicalKeyboardKey.keyY); // Configure
+      await tester.tap(find.text('Pick a system'));
+      await tester.pumpAndSettle();
+
+      expect(FocusManager.instance.highlightStrategy, before);
+    });
+
     testWidgets('systems without a standalone emulator are not offered', (
       tester,
     ) async {
@@ -1728,6 +1824,129 @@ void main() {
         find.byKey(const ValueKey('custom-folder-current-path')),
         findsNothing,
       );
+    });
+
+    const tick = Duration(milliseconds: 20);
+
+    /// Adds [count] more systems with a standalone emulator each, so a
+    /// systems menu has more entries than one press per entry wants.
+    Future<void> addSystems(int count) async {
+      final db = await SqliteService.getDatabase();
+      for (var i = 0; i < count; i++) {
+        await db.execute(
+          'INSERT INTO app_systems (id, real_name, folder_name) VALUES '
+          "('sys$i', 'System $i', 'sys$i')",
+        );
+        await db.execute(
+          'INSERT INTO app_emulators (system_id, os_id, name, '
+          'unique_identifier, is_standalone, is_default) '
+          "VALUES ('sys$i', 1, 'Emulator $i', 'sys$i.standalone.emu', 1, 0)",
+        );
+      }
+    }
+
+    /// Presses the controller's [button], or with [holdFor] holds it down
+    /// that long, then releases it.
+    Future<void> controller(
+      WidgetTester tester,
+      String button, {
+      Duration holdFor = Duration.zero,
+    }) async {
+      await pastGrace(tester);
+      // Android delivers keycode buttons inverted: 0 pressed, 1 released.
+      await send(tester, button, 0, type: 'button');
+      await tester.pump();
+      for (var held = Duration.zero; held < holdFor; held += tick) {
+        await tester.pump(tick);
+      }
+      await send(tester, button, 1, type: 'button');
+      await tester.pumpAndSettle();
+    }
+
+    /// The system the dialog would pick at [index] of its systems menu.
+    String systemAt(WidgetTester tester, int index) => tester
+        .widget<CustomSaveFoldersDialog>(find.byType(CustomSaveFoldersDialog))
+        .systems[index]
+        .folderName;
+
+    testWidgets('holding a direction scrolls an open menu to its last entry, '
+        'and stops there', (tester) async {
+      await addSystems(8);
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+      await controller(tester, 'KEYCODE_BUTTON_Y'); // Configure
+      await controller(tester, 'KEYCODE_BUTTON_A'); // open the systems
+      // Long enough for many more repeats than the menu has entries.
+      await controller(
+        tester,
+        'KEYCODE_DPAD_DOWN',
+        holdFor: const Duration(seconds: 2),
+      );
+      // A press up after the end: the menu stopped there rather than wrapping.
+      await controller(tester, 'KEYCODE_DPAD_UP');
+      await controller(tester, 'KEYCODE_BUTTON_A'); // pick it
+
+      final systems = tester
+          .widget<CustomSaveFoldersDialog>(find.byType(CustomSaveFoldersDialog))
+          .systems;
+      expect(systems, hasLength(9));
+      expect(
+        picked(tester, 'custom-folder-system'),
+        systemAt(tester, systems.length - 2),
+      );
+    });
+
+    testWidgets('a held direction moves the form one row per press', (
+      tester,
+    ) async {
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+      await controller(tester, 'KEYCODE_BUTTON_Y'); // Configure
+      await controller(tester, 'KEYCODE_BUTTON_A'); // open the systems
+      await controller(tester, 'KEYCODE_BUTTON_A'); // the DS
+      await controller(tester, 'KEYCODE_BUTTON_A'); // open the emulators
+      await controller(tester, 'KEYCODE_BUTTON_A'); // WatermelonDS
+      expect(selectFolderMark(tester).boxShadow, isNotEmpty);
+
+      await controller(
+        tester,
+        'KEYCODE_DPAD_UP',
+        holdFor: const Duration(seconds: 1),
+      );
+
+      expect(selectFolderMark(tester).boxShadow, isEmpty);
+      // On the emulator picker, one row up, not the system picker above it:
+      // A opens the emulators.
+      await controller(tester, 'KEYCODE_BUTTON_A');
+      expect(find.text('Standalone WatermelonDS'), findsNWidgets(2));
+      expect(find.text('Nintendo DS (ds)'), findsOneWidget);
+    });
+
+    // Where Flutter's focus system also moves a menu on the arrow keys, as
+    // under this harness's default shortcuts, it repeats them itself.
+    testWidgets('a held arrow key leaves repeating an open menu to Flutter', (
+      tester,
+    ) async {
+      await addSystems(8);
+      await pumpTab(tester, tab: CustomSaveFoldersView(onBack: () {}));
+
+      await press(tester, LogicalKeyboardKey.keyY); // Configure
+      await press(tester, LogicalKeyboardKey.enter); // open the systems
+      await pastGrace(tester);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowDown);
+      // Short of the navigator's first repeat.
+      await tester.pump(const Duration(milliseconds: 100));
+      final afterPress = FocusManager.instance.primaryFocus;
+      for (var held = Duration.zero; held < const Duration(seconds: 1);) {
+        await tester.pump(tick);
+        held += tick;
+      }
+
+      // This test sends no key repeats, so none of Flutter's moved it, and
+      // the navigator's own repeats moved nothing.
+      expect(FocusManager.instance.primaryFocus, same(afterPress));
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
     });
   });
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -9,6 +10,7 @@ import 'package:neostation/models/system_model.dart';
 import 'package:neostation/models/core_emulator_model.dart';
 import 'package:neostation/repositories/neosync_save_folder_repository.dart';
 import 'package:neostation/services/gamepad/gamepad_navigation_manager.dart';
+import 'package:neostation/utils/app_shortcuts.dart';
 import 'package:neostation/utils/gamepad_nav.dart';
 import 'package:neostation/widgets/core_footer.dart';
 
@@ -22,7 +24,8 @@ import 'package:neostation/widgets/core_footer.dart';
 /// On a controller, up/down move between the system picker, the emulator
 /// picker and the Select folder button, and A opens or presses the focused
 /// one. While a picker's menu is open the same buttons drive the menu: up/down
-/// move through its entries, A picks one and B closes it.
+/// move through its entries, and scroll it while held, A picks one and B
+/// closes it.
 ///
 /// Opened on a configured folder, it starts filled in with that folder's
 /// system, emulator and path, ready to change any of them.
@@ -69,17 +72,22 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
   bool _closed = false;
   _Row _focusedRow = _Row.system;
 
+  /// The highlight strategy [_showMenuFocus] replaced, put back on dispose;
+  /// null while it has replaced none.
+  FocusHighlightStrategy? _replacedHighlightStrategy;
+
   @override
   void initState() {
     super.initState();
     _prefill();
     _gamepadNav = GamepadNavigation(
-      onNavigateUp: () => _navigate(TraversalDirection.up),
-      onNavigateDown: () => _navigate(TraversalDirection.down),
+      // Held directions repeat only in an open picker's menu (see _navigate).
+      onNavigateUp: (bool isRepeat) =>
+          _navigate(TraversalDirection.up, isRepeat: isRepeat),
+      onNavigateDown: (bool isRepeat) =>
+          _navigate(TraversalDirection.down, isRepeat: isRepeat),
       onSelectItem: _activate,
       onBack: _back,
-      // A short fixed form: one move per press.
-      allowRepeat: false,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -101,6 +109,9 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
 
   @override
   void dispose() {
+    if (_replacedHighlightStrategy case final strategy?) {
+      FocusManager.instance.highlightStrategy = strategy;
+    }
     GamepadNavigationManager.popLayer(_layerId);
     _gamepadNav.dispose();
     _systemFocus.dispose();
@@ -149,6 +160,7 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
   /// only when the key left the menu as it found it, does each press once. An
   /// entry activated twice pops twice, and the second pop closes the dialog.
   void _driveMenu(Intent intent) {
+    _showMenuFocus();
     final before = FocusManager.instance.primaryFocus;
     scheduleMicrotask(() {
       if (!mounted || !_menuOpen) return;
@@ -159,19 +171,65 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
     });
   }
 
-  void _navigate(TraversalDirection direction) {
-    if (_menuOpen) {
-      // Move through the open menu's entries the way the arrow keys would.
-      _driveMenu(DirectionalFocusIntent(direction));
-      return;
-    }
+  /// Moves the controller's focus [direction], answering whether to count it
+  /// as a move: the navigator plays the move sound only for one.
+  ///
+  /// A held direction scrolls an open menu, but the short form beneath it
+  /// moves one row per press, so a repeat never moves the form. That also
+  /// keeps a direction still held as a menu closes from carrying on down the
+  /// form. A first press on the form counts as a move even at its first or
+  /// last row, as it always has.
+  bool _navigate(TraversalDirection direction, {required bool isRepeat}) {
+    if (_menuOpen) return _moveInMenu(direction, isRepeat: isRepeat);
+    if (isRepeat) return false;
     final rows = _focusableRows;
     final next =
         rows.indexOf(_focusedRow) +
         (direction == TraversalDirection.up ? -1 : 1);
-    if (next < 0 || next >= rows.length) return;
-    setState(() => _focusedRow = rows[next]);
+    if (next >= 0 && next < rows.length) {
+      setState(() => _focusedRow = rows[next]);
+    }
+    return true;
   }
+
+  /// Moves the open menu's focus [direction], answering whether it moved.
+  ///
+  /// Where the app keeps Flutter's arrow-key shortcuts (see `appShortcuts`),
+  /// an arrow key moves the menu through Flutter's focus system as well, and
+  /// repeats there while held. That press goes the deferred way of
+  /// [_driveMenu], and the navigator's repeats of it are declined. Any other
+  /// press, a controller's included, moves the menu straight away, so a held
+  /// direction scrolls it and stops at its first or last entry.
+  bool _moveInMenu(TraversalDirection direction, {required bool isRepeat}) {
+    if (_arrowKeyMovesMenu) {
+      if (isRepeat) return false;
+      _driveMenu(DirectionalFocusIntent(direction));
+      return true;
+    }
+    _showMenuFocus();
+    return FocusManager.instance.primaryFocus?.focusInDirection(direction) ??
+        false;
+  }
+
+  /// Whether an arrow key is down where Flutter's focus system moves an open
+  /// menu on it too: where `appShortcuts` keeps the default directional
+  /// shortcuts, or replaces none of them.
+  static bool get _arrowKeyMovesMenu {
+    final keepsArrows =
+        appShortcuts()?.values.any(
+          (intent) => intent is DirectionalFocusIntent,
+        ) ??
+        true;
+    return keepsArrows &&
+        HardwareKeyboard.instance.logicalKeysPressed.any(_arrowKeys.contains);
+  }
+
+  static final _arrowKeys = {
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+    LogicalKeyboardKey.arrowLeft,
+    LogicalKeyboardKey.arrowRight,
+  };
 
   void _activate() {
     if (_menuOpen) {
@@ -192,7 +250,23 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
   /// Opens the menu of the picker that owns [focusNode], as a tap would.
   void _openMenu(FocusNode focusNode) {
     final picker = focusNode.context;
-    if (picker != null) Actions.maybeInvoke(picker, const ActivateIntent());
+    if (picker == null) return;
+    _showMenuFocus();
+    Actions.maybeInvoke(picker, const ActivateIntent());
+  }
+
+  /// Makes an open menu show the entry the controller is on.
+  ///
+  /// An entry draws its focus only in Flutter's traditional highlight mode,
+  /// which a keyboard switches to but the controller, read through the
+  /// gamepads plugin rather than as key events, never does. On Android, where
+  /// the mode stays touch, the entry the controller moved to looked like the
+  /// rest. Only a controller-driven menu does this; [dispose] puts the
+  /// strategy back.
+  void _showMenuFocus() {
+    final focus = FocusManager.instance;
+    _replacedHighlightStrategy ??= focus.highlightStrategy;
+    focus.highlightStrategy = FocusHighlightStrategy.alwaysTraditional;
   }
 
   void _back() {
@@ -301,7 +375,15 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
       contentPadding: EdgeInsets.symmetric(horizontal: 10.r, vertical: 8.r),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
     );
-    final selectStyle = TextStyle(fontSize: 12.r);
+    // A picker's style replaces the theme's text style, colour included, in
+    // the field and in its menu, so it names the colour that reads on the
+    // menu's surface. Without one, a light theme's menu was white on white.
+    final selectStyle = TextStyle(
+      fontSize: 12.r,
+      color: theme.colorScheme.onSurface,
+    );
+    // Size only, so a hint keeps the picker's hint and disabled colours.
+    final hintStyle = TextStyle(fontSize: 12.r);
 
     // The controller drives this dialog, so Flutter focus is kept off its
     // widgets: a keyboard Enter would otherwise also open whichever picker
@@ -345,9 +427,10 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
                     isExpanded: true,
                     decoration: selectDecoration,
                     style: selectStyle,
+                    dropdownColor: theme.colorScheme.surface,
                     hint: Text(
                       AppLocale.customSaveFolderPickSystem.getString(context),
-                      style: selectStyle,
+                      style: hintStyle,
                     ),
                     items: widget.systems
                         .map(
@@ -377,9 +460,10 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
                     isExpanded: true,
                     decoration: selectDecoration,
                     style: selectStyle,
+                    dropdownColor: theme.colorScheme.surface,
                     hint: Text(
                       AppLocale.customSaveFolderPickEmulator.getString(context),
-                      style: selectStyle,
+                      style: hintStyle,
                     ),
                     items: _emulators
                         .map(
