@@ -24,6 +24,10 @@ String? saveFolderContaining(Iterable<String> folders, String filePath) {
   return best;
 }
 
+/// Whether [filePath]'s file name starts with [prefix], ignoring case.
+bool fileNameStartsWith(String filePath, String prefix) =>
+    path.basename(filePath).toLowerCase().startsWith(prefix.toLowerCase());
+
 /// Every file under [folders], however deep, that could be a save, walked off
 /// the UI isolate. NeoSync recovery backups (`*.neosync.bak`) and files over
 /// [maxSaveFileSize] are left out.
@@ -34,7 +38,6 @@ Future<List<String>> listSaveFilePaths(
   List<String> folders, {
   String namePrefix = '',
 }) {
-  final prefix = namePrefix.toLowerCase();
   return Isolate.run(() {
     // A file that cannot be statted (a dangling link) is no save.
     bool small(File file) {
@@ -50,9 +53,8 @@ Future<List<String>> listSaveFilePaths(
       final dir = Directory(folderPath);
       if (!dir.existsSync()) continue;
       for (final file in dir.listSync(recursive: true).whereType<File>()) {
-        final lower = file.path.toLowerCase();
-        if (lower.endsWith('.neosync.bak')) continue;
-        if (!path.basename(lower).startsWith(prefix)) continue;
+        if (file.path.toLowerCase().endsWith('.neosync.bak')) continue;
+        if (!fileNameStartsWith(file.path, namePrefix)) continue;
         if (small(file)) paths.add(file.path);
       }
     }

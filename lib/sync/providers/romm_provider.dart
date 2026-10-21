@@ -806,6 +806,7 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     List<LocalSaveFile> found, {
     Set<String> romExtensions = const {},
   }) {
+    final romName = _lowerRomName(game.romname);
     return found.where((f) {
       final name = path.basename(f.filePath);
       final lower = name.toLowerCase();
@@ -824,12 +825,12 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
         return false;
       }
 
-      if (!_belongsToRom(name, game.romname)) {
+      if (!_belongsToRom(lower, romName)) {
         _log.i('RomM: skipping $name (not named after ${game.romname})');
         return false;
       }
 
-      if (_isRom(name, game.romname, romExtensions)) {
+      if (_isRom(lower, romName, romExtensions)) {
         _log.i('RomM: skipping $name (a ROM, not a save)');
         return false;
       }
@@ -849,8 +850,10 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
   /// downloaded. Nothing is deleted: they stay on RomM for the user to clear.
   static bool _isGameAsset(RommAsset asset, GameModel game, _GameSaves saves) {
     final name = localNameForAsset(asset);
-    if (!_belongsToRom(name, game.romname) ||
-        _isRom(name, game.romname, saves.romExtensions)) {
+    final lower = name.toLowerCase();
+    final romName = _lowerRomName(game.romname);
+    if (!_belongsToRom(lower, romName) ||
+        _isRom(lower, romName, saves.romExtensions)) {
       _log.i('RomM: ignoring remote ${asset.fileName} for ${game.romname}');
       return false;
     }
@@ -868,13 +871,17 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
     return true;
   }
 
-  /// The name rule (see [syncableSaves]).
-  static bool _belongsToRom(String fileName, String romname) {
-    final romName = _romNameWithoutExtension(romname).toLowerCase();
+  /// The ROM's name as the name rule compares it: [romname] without its last
+  /// extension, lowercased.
+  static String _lowerRomName(String romname) =>
+      _romNameWithoutExtension(romname).toLowerCase();
+
+  /// The name rule (see [syncableSaves]) for the lowercased [lowerFileName]
+  /// and a [_lowerRomName].
+  static bool _belongsToRom(String lowerFileName, String romName) {
     if (romName.isEmpty) return false;
-    final lower = fileName.toLowerCase();
-    if (!lower.startsWith(romName)) return false;
-    return _afterRomName.hasMatch(lower.substring(romName.length));
+    if (!lowerFileName.startsWith(romName)) return false;
+    return _afterRomName.hasMatch(lowerFileName.substring(romName.length));
   }
 
   /// What may follow the ROM's name in one of its files' names.
@@ -886,17 +893,16 @@ class RomMSyncProvider extends ChangeNotifier implements ISyncProvider {
       e.toLowerCase().replaceFirst(RegExp(r'^\.'), ''),
   };
 
-  /// Whether [fileName] is [romname]'s ROM name with one of [romExtensions]:
-  /// the game itself, or another of its files (`Game.bin` beside `Game.cue`).
+  /// Whether the lowercased [lowerFileName] is [romName] (a [_lowerRomName])
+  /// with one of [romExtensions]: the game itself, or another of its files
+  /// (`Game.bin` beside `Game.cue`).
   static bool _isRom(
-    String fileName,
-    String romname,
+    String lowerFileName,
+    String romName,
     Set<String> romExtensions,
   ) {
-    final lower = fileName.toLowerCase();
-    final romName = _romNameWithoutExtension(romname).toLowerCase();
-    if (!lower.startsWith('$romName.')) return false;
-    return romExtensions.contains(lower.substring(romName.length + 1));
+    if (!lowerFileName.startsWith('$romName.')) return false;
+    return romExtensions.contains(lowerFileName.substring(romName.length + 1));
   }
 
   /// Drops a single trailing extension, matching how the library indexes a

@@ -7,6 +7,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:neostation/l10n/app_locale.dart';
 import 'package:neostation/models/system_model.dart';
 import 'package:neostation/models/core_emulator_model.dart';
+import 'package:neostation/repositories/neosync_save_folder_repository.dart';
 import 'package:neostation/services/gamepad/gamepad_navigation_manager.dart';
 import 'package:neostation/utils/gamepad_nav.dart';
 import 'package:neostation/widgets/core_footer.dart';
@@ -33,12 +34,11 @@ class CustomSaveFoldersDialog extends StatefulWidget {
   /// The standalone emulators each system offers, keyed by folder name.
   final Map<String, List<CoreEmulatorModel>> emulatorsBySystem;
 
-  final Future<void> Function(String system, String emulatorSlug)
+  final Future<void> Function(String system, String emulatorUniqueId)
   onSelectFolder;
 
-  /// The configured folder being edited as `(system, emulatorUniqueId,
-  /// path)`, or null to configure a new one.
-  final (String, String, String)? editing;
+  /// The configured folder being edited, or null to configure a new one.
+  final CustomSaveFolder? editing;
 
   const CustomSaveFoldersDialog({
     super.key,
@@ -115,7 +115,7 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
   void _prefill() {
     final editing = widget.editing;
     if (editing == null) return;
-    final (system, emulatorUniqueId, _) = editing;
+    final (:system, :emulatorUniqueId, path: _) = editing;
     final emulators = widget.emulatorsBySystem[system];
     if (emulators == null) return;
     _selectedSystem = system;
@@ -426,7 +426,7 @@ class _CustomSaveFoldersDialogState extends State<CustomSaveFoldersDialog> {
                     ),
                   ),
                 ),
-                if (widget.editing case (_, _, final path)) ...[
+                if (widget.editing?.path case final path?) ...[
                   SizedBox(height: 6.r),
                   // The folder configured now, which Select folder replaces.
                   Padding(

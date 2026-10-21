@@ -26,6 +26,9 @@ import '../../app_screen.dart';
 import 'custom_save_folders_panel.dart';
 import 'neo_sync_shared.dart';
 
+/// What a folder's upload sent and what was already there.
+typedef SaveFolderUploadCounts = ({int uploaded, int upToDate});
+
 /// Full-screen Custom Save Folders view.
 ///
 /// Lets the user configure per-emulator custom save folders (ARMSX2, DuckStation,
@@ -33,9 +36,6 @@ import 'neo_sync_shared.dart';
 /// backgrounding while the SAF picker is open), and each configured folder can
 /// be re-synced or removed. Replaces the inline panel with its own navigation
 /// layer.
-/// What a folder's upload sent and what was already there.
-typedef SaveFolderUploadCounts = ({int uploaded, int upToDate});
-
 class CustomSaveFoldersView extends StatefulWidget {
   final VoidCallback onBack;
 
@@ -72,7 +72,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
   /// The standalone emulators of each of [_systems], keyed by folder name.
   Map<String, List<CoreEmulatorModel>> _emulatorsBySystem = {};
-  List<(String, String, String)> _configured = [];
+  List<CustomSaveFolder> _configured = [];
   bool _syncing = false;
   int _selectedFolderIndex = 0;
 
@@ -181,7 +181,8 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       _openConfigDialog();
       return;
     }
-    final (system, slug, _) = _configured[_selectedFolderIndex];
+    final (:system, :emulatorUniqueId, path: _) =
+        _configured[_selectedFolderIndex];
 
     _gamepadNav.deactivate();
     final confirmed = await ConfirmActionDialog.show(
@@ -195,7 +196,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     _gamepadNav.activate();
 
     if (confirmed != true) return;
-    await _removeFolder(system, slug);
+    await _removeFolder(system, emulatorUniqueId);
   }
 
   Future<void> _load() => Future.wait([_loadSystems(), _loadConfigured()]);
@@ -275,21 +276,21 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     }
   }
 
-  /// Picks and saves the folder for [system] and [emulatorSlug], then uploads
-  /// its saves.
+  /// Picks and saves the folder for [system] and [emulatorUniqueId], then
+  /// uploads its saves.
   ///
-  /// [replacing] is the configured folder this edits, as `(system,
-  /// emulatorUniqueId, path)`. An edit that moves it to another system or
-  /// emulator removes the old entry, so the list keeps one row for it.
+  /// [replacing] is the configured folder this edits. An edit that moves it to
+  /// another system or emulator removes the old entry, so the list keeps one
+  /// row for it.
   ///
   /// Choosing a system and emulator that already have a different folder
   /// replaces that one, so it asks first.
   Future<void> _selectFolderFor(
     String system,
-    String emulatorSlug, {
-    (String, String, String)? replacing,
+    String emulatorUniqueId, {
+    CustomSaveFolder? replacing,
   }) async {
-    _log.i('CustomSaveFolder: picker start for $system / $emulatorSlug');
+    _log.i('CustomSaveFolder: picker start for $system / $emulatorUniqueId');
     // Before the first await, while the configure dialog's layer is still on
     // top: its pop must find this one above the view.
     _holdForPicker();
@@ -298,7 +299,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       try {
         selected =
             await (CustomSaveFoldersView.debugPickFolder?.call() ??
-                _pickFolder(initialDirectory: replacing?.$3));
+                _pickFolder(initialDirectory: replacing?.path));
       } finally {
         _releasePickerHold();
       }
@@ -319,7 +320,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
       if (!await _confirmReplace(
         system,
-        emulatorSlug,
+        emulatorUniqueId,
         folderPath,
         replacing: replacing,
       )) {
@@ -328,21 +329,22 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
       await NeoSyncSaveFolderRepository.saveFolder(
         system,
-        emulatorSlug,
+        emulatorUniqueId,
         folderPath,
       );
-      if (replacing case (
-        final oldSystem,
-        final oldEmulator,
-        _,
-      ) when oldSystem != system || oldEmulator != emulatorSlug) {
-        await NeoSyncSaveFolderRepository.removeFolder(oldSystem, oldEmulator);
+      if (replacing != null &&
+          (replacing.system != system ||
+              replacing.emulatorUniqueId != emulatorUniqueId)) {
+        await NeoSyncSaveFolderRepository.removeFolder(
+          replacing.system,
+          replacing.emulatorUniqueId,
+        );
       }
       await _loadConfigured();
       if (!mounted) return;
       // Keep the cursor on the row just saved, wherever it now sorts.
       final saved = _configured.indexWhere(
-        (c) => c.$1 == system && c.$2 == emulatorSlug,
+        (c) => c.system == system && c.emulatorUniqueId == emulatorUniqueId,
       );
       if (saved != -1) setState(() => _selectedFolderIndex = saved);
 
@@ -360,21 +362,21 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       try {
         final counts = upload != null
             ? await _uploadWith(upload, system, messages)
-            : await _uploadToNeoSync(system, emulatorSlug, messages);
+            : await _uploadToNeoSync(system, emulatorUniqueId, messages);
         if (counts == null) {
-          _showUpload(messages.failed, custom.NotificationType.error);
+          _showUpload(messages.failed, GlobalNotificationType.error);
         } else {
           _showUpload(
             messages.complete
                 .replaceFirst('{uploaded}', '${counts.uploaded}')
                 .replaceFirst('{skipped}', '${counts.upToDate}'),
-            custom.NotificationType.success,
+            GlobalNotificationType.success,
             progress: 1,
           );
         }
       } catch (e, st) {
         _log.e('CustomSaveFolder: upload failed', error: e, stackTrace: st);
-        _showUpload(messages.failed, custom.NotificationType.error);
+        _showUpload(messages.failed, GlobalNotificationType.error);
       } finally {
         if (mounted) setState(() => _syncing = false);
       }
@@ -394,22 +396,24 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     }
   }
 
-  /// Whether saving [folderPath] for [system] and [emulatorSlug] may go ahead:
-  /// straight away unless it would replace a different folder already
+  /// Whether saving [folderPath] for [system] and [emulatorUniqueId] may go
+  /// ahead: straight away unless it would replace a different folder already
   /// configured for them, other than the one being edited ([replacing]), in
   /// which case the user is asked.
   Future<bool> _confirmReplace(
     String system,
-    String emulatorSlug,
+    String emulatorUniqueId,
     String folderPath, {
-    (String, String, String)? replacing,
+    CustomSaveFolder? replacing,
   }) async {
     final existing = _configured
-        .where((c) => c.$1 == system && c.$2 == emulatorSlug)
+        .where(
+          (c) => c.system == system && c.emulatorUniqueId == emulatorUniqueId,
+        )
         .firstOrNull;
     if (existing == null ||
         existing == replacing ||
-        path.equals(existing.$3, folderPath)) {
+        path.equals(existing.path, folderPath)) {
       return true;
     }
     _gamepadNav.deactivate();
@@ -418,8 +422,8 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
       title: AppLocale.customSaveFolderReplace.getString(context),
       body: AppLocale.customSaveFolderReplaceConfirm
           .getString(context)
-          .replaceFirst('{name}', _folderHeading(system, emulatorSlug))
-          .replaceFirst('{path}', existing.$3),
+          .replaceFirst('{name}', _folderHeading(system, emulatorUniqueId))
+          .replaceFirst('{path}', existing.path),
       confirmLabel: AppLocale.customSaveFolderReplace.getString(context),
       cancelLabel: AppLocale.cancel.getString(context),
       icon: Symbols.folder_special_rounded,
@@ -462,17 +466,13 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   /// has left this view.
   void _showUpload(
     String message,
-    custom.NotificationType type, {
+    GlobalNotificationType type, {
     double? progress,
     bool ongoing = false,
   }) => GlobalNotificationService().show(
     id: _uploadNotificationId,
     message: message,
-    type: switch (type) {
-      custom.NotificationType.info => GlobalNotificationType.info,
-      custom.NotificationType.success => GlobalNotificationType.success,
-      custom.NotificationType.error => GlobalNotificationType.error,
-    },
+    type: type,
     progress: progress,
     ongoing: ongoing,
   );
@@ -480,20 +480,20 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   /// Uploads the folder's existing saves to NeoSync, showing its progress.
   Future<SaveFolderUploadCounts?> _uploadToNeoSync(
     String system,
-    String emulatorSlug,
+    String emulatorUniqueId,
     _UploadMessages messages,
   ) async {
     final provider = context.read<NeoSyncProvider>();
     _showUpload(
       messages.uploading,
-      custom.NotificationType.info,
+      GlobalNotificationType.info,
       progress: 0,
       ongoing: true,
     );
     void listener() {
       _showUpload(
         messages.uploading,
-        custom.NotificationType.info,
+        GlobalNotificationType.info,
         progress: provider.syncProgress,
         ongoing: true,
       );
@@ -501,7 +501,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
 
     provider.addListener(listener);
     try {
-      await provider.syncCustomSaveFolder(system, emulatorSlug);
+      await provider.syncCustomSaveFolder(system, emulatorUniqueId);
     } finally {
       provider.removeListener(listener);
     }
@@ -515,16 +515,12 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
     String system,
     _UploadMessages messages,
   ) {
-    _showUpload(
-      messages.uploading,
-      custom.NotificationType.info,
-      ongoing: true,
-    );
+    _showUpload(messages.uploading, GlobalNotificationType.info, ongoing: true);
     return upload(system);
   }
 
-  Future<void> _removeFolder(String system, String emulatorSlug) async {
-    await NeoSyncSaveFolderRepository.removeFolder(system, emulatorSlug);
+  Future<void> _removeFolder(String system, String emulatorUniqueId) async {
+    await NeoSyncSaveFolderRepository.removeFolder(system, emulatorUniqueId);
     await _loadConfigured();
   }
 
@@ -536,7 +532,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
   /// what hands the controller back here. Reactivating this navigator when the
   /// dialog's future completes instead would wake it under the folder picker
   /// the dialog hands over to, and both would act on the same press.
-  void _openConfigDialog({(String, String, String)? editing}) {
+  void _openConfigDialog({CustomSaveFolder? editing}) {
     if (_syncing) return;
     _gamepadNav.deactivate();
     showDialog<void>(
@@ -545,8 +541,8 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
         systems: _systems,
         emulatorsBySystem: _emulatorsBySystem,
         editing: editing,
-        onSelectFolder: (system, slug) =>
-            _selectFolderFor(system, slug, replacing: editing),
+        onSelectFolder: (system, emulatorUniqueId) =>
+            _selectFolderFor(system, emulatorUniqueId, replacing: editing),
       ),
     );
   }
@@ -694,8 +690,8 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
                                       children: [
                                         Text(
                                           _folderHeading(
-                                            _configured[i].$1,
-                                            _configured[i].$2,
+                                            _configured[i].system,
+                                            _configured[i].emulatorUniqueId,
                                           ),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
@@ -707,7 +703,7 @@ class _CustomSaveFoldersViewState extends State<CustomSaveFoldersView> {
                                         ),
                                         SizedBox(height: 2.r),
                                         Text(
-                                          _configured[i].$3,
+                                          _configured[i].path,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: theme.textTheme.bodySmall

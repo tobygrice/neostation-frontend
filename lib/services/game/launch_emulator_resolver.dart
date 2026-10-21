@@ -31,6 +31,7 @@ class LaunchEmulator {
 class LaunchEmulatorResolver {
   LaunchEmulatorResolver._();
 
+  /// The Launch Emulator for [game] on [system].
   ///
   /// [systemDefaults] memoises the system-level answer by system id, for a
   /// caller resolving many games in one pass: on Android the auto-resolved
@@ -193,19 +194,14 @@ class LaunchEmulatorResolver {
 /// moment. Install state changes outside the app, hence the short [maxAge].
 class InstalledDefaultCache {
   /// How long an answer is trusted.
-  final Duration maxAge;
+  static const maxAge = Duration(seconds: 30);
 
   final DateTime Function() _now;
   final _entries =
       <String, ({DateTime at, Future<CoreEmulatorModel?> emulator})>{};
 
-  InstalledDefaultCache({
-    this.maxAge = const Duration(seconds: 30),
-    @visibleForTesting DateTime Function()? now,
-  }) : _now = now ?? DateTime.now;
-
-  /// Forgets every answer.
-  void clear() => _entries.clear();
+  InstalledDefaultCache({@visibleForTesting DateTime Function()? now})
+    : _now = now ?? DateTime.now;
 
   Future<CoreEmulatorModel?> _get(
     String systemId,

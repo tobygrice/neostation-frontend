@@ -921,10 +921,7 @@ void main() {
     test('is reused until it expires, while the user\'s own default is always '
         'read afresh', () async {
       var now = DateTime(2026, 10, 21);
-      final cache = InstalledDefaultCache(
-        maxAge: const Duration(seconds: 30),
-        now: () => now,
-      );
+      final cache = InstalledDefaultCache(now: () => now);
       final system = (await SystemRepository.getSystemByFolderName('ds'))!;
       Future<String?> launchEmulator() async =>
           (await LaunchEmulatorResolver.resolve(
@@ -939,7 +936,7 @@ void main() {
       now = now.add(const Duration(seconds: 10));
       expect(await launchEmulator(), _raMelon, reason: 'still remembered');
 
-      now = now.add(const Duration(seconds: 30));
+      now = now.add(InstalledDefaultCache.maxAge);
       expect(await launchEmulator(), _watermelon, reason: 'expired');
 
       await db.execute(

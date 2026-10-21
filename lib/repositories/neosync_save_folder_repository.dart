@@ -1,5 +1,13 @@
 import '../data/datasources/sqlite_service.dart';
 
+/// A configured custom save folder: where the emulator [emulatorUniqueId]
+/// keeps its saves for [system] (a system folder name).
+typedef CustomSaveFolder = ({
+  String system,
+  String emulatorUniqueId,
+  String path,
+});
+
 /// Repository for the NeoSync module's per-system custom save folders.
 ///
 /// Standalone emulators with relocatable data directories (ARMSX2, ARMSX1,
@@ -61,8 +69,8 @@ class NeoSyncSaveFolderRepository {
     pathField: 'folder_path',
   );
 
-  /// Returns every configured folder as `(system, emulatorSlug, path)`.
-  static Future<List<(String, String, String)>> getAllEntries() async {
+  /// Returns every configured folder.
+  static Future<List<CustomSaveFolder>> getAllEntries() async {
     final db = await SqliteService.getDatabase();
     final results = await db.query(_table);
     return [
@@ -71,9 +79,9 @@ class NeoSyncSaveFolderRepository {
             row['emulator_slug'] != null &&
             row['folder_path'] != null)
           (
-            row['system_folder_name'].toString(),
-            row['emulator_slug'].toString(),
-            row['folder_path'].toString(),
+            system: row['system_folder_name'].toString(),
+            emulatorUniqueId: row['emulator_slug'].toString(),
+            path: row['folder_path'].toString(),
           ),
     ];
   }

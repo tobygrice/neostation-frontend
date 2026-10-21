@@ -144,11 +144,10 @@ final class StandaloneSaveLocation extends RommSaveLocation {
   /// Otherwise each would be compared against, and uploaded over, the same
   /// asset.
   Future<List<LocalSaveFile>> list(String romName, String gameName) async {
-    final prefix = romName.toLowerCase();
     final paths = walkOnce
         ? [
             for (final p in await _allPaths)
-              if (path.basename(p).toLowerCase().startsWith(prefix)) p,
+              if (fileNameStartsWith(p, romName)) p,
           ]
         : await listSaveFilePaths([root], namePrefix: romName);
     final byName = <String, LocalSaveFile>{};
