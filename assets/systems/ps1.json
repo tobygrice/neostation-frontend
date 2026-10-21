@@ -53,6 +53,14 @@
       "unique_id": "ps1.com.github.stenzek.duckstation",
       "description": "Supported extensions: bin, chd, cue, ecm, exe, img, iso, m3u, mds, pbp, psexe, psf.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.mcd"],
+        "states": ["*.sav"],
+        "dirs": {
+          "saves": "memcards",
+          "states": "savestates"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-a android.intent.action.VIEW -n com.github.stenzek.duckstation/.EmulationActivity -e bootPath \"{file.path}\" --ez resumeState 0 --activity-clear-task --activity-clear-top"

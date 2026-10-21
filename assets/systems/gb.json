@@ -70,6 +70,10 @@
       "unique_id": "gb.com.sky.SkyEmu",
       "description": "Supported extensions: gb, gbc.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.sav"],
+        "states": ["*.state.raw", "*.state.png"]
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.sky.SkyEmu/.EnhancedNativeActivity -a android.intent.action.VIEW -d \"{file.uri}\" --activity-clear-task --activity-clear-top --activity-no-history"
@@ -81,6 +85,14 @@
       "unique_id": "gb.com.explusalpha.GbcEmu",
       "description": "Support extensions: bin, cgb, dmg, gb, gbc, gbs, rom, sgb.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.sav", "*.rtc"],
+        "states": ["*.gqs"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.GbcEmu/com.imagine.BaseActivity -a android.intent.action.VIEW -d \"{file.localuri}\" -t application/zip --activity-clear-task --activity-clear-top --activity-no-history"
@@ -92,6 +104,12 @@
       "unique_id": "gb.com.fastemulator.gbc",
       "description": "Support extensions: bin, cgb, dmg, gb, gbc, gbs, rom, sgb.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.sav", "*.rtc"],
+        "dirs": {
+          "saves": "save"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.fastemulator.gbc/.EmulatorActivity -a android.intent.action.VIEW -d \"{file.uri}\" --activity-clear-task --activity-clear-top --activity-no-history"
@@ -103,6 +121,12 @@
       "unique_id": "gb.com.pixelrespawn.linkboy",
       "description": "Support extensions: bin, cgb, dmg, gb, gbc, gbs, rom, sgb.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.sav"],
+        "dirs": {
+          "saves": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.pixelrespawn.linkboy/.EmulatorActivity -a android.intent.action.VIEW -d \"{file.uri}\" --activity-clear-task --activity-clear-top --activity-no-history"

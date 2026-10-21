@@ -40,6 +40,14 @@
       "unique_id": "naomigd.com.flycast.emulator",
       "description": "Supported extensions: 7z, chd, dat, lst, zip.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.nvmem", "*.nvmem2", "*.eeprom", "*_vmu_save_*.bin"],
+        "states": ["*.state"],
+        "dirs": {
+          "saves": "data",
+          "states": "data"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.flycast.emulator/com.flycast.emulator.MainActivity -a android.intent.action.VIEW -d \"{file.uri}\"",

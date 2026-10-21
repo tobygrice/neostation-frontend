@@ -158,6 +158,14 @@
       "unique_id": "2600.com.explusalpha.A2600Emu",
       "is_retroachievements_compatible": false,
       "description": "Supported extensions: a26, bin.",
+      "save_files": {
+        "saves": [],
+        "states": ["*.sta"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.A2600Emu/com.imagine.BaseActivity -a android.intent.action.VIEW -d \"{file.localuri}\""
@@ -180,6 +188,14 @@
       "unique_id": "2600.com.stella.emulator",
       "is_retroachievements_compatible": false,
       "description": "Supported extensions: a26, bin, zip.",
+      "save_files": {
+        "saves": ["*_flash.dat", "*_eeprom.dat"],
+        "states": ["*.st[0-9]"],
+        "dirs": {
+          "saves": "nvram",
+          "states": "state"
+        }
+      },
       "platforms": {
         "windows": {
           "executable": "stella.exe",

@@ -44,6 +44,14 @@
       "unique_id": "wsc.com.explusalpha.SwanEmu",
       "description": "Supported extensions: ws, wsc, pc2, 7z, zip",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.sav", "*.flash"],
+        "states": ["*.nc?"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.SwanEmu/com.imagine.BaseActivity   -a android.intent.action.VIEW   -d \"{file.localuri}\"    -t application/zip"

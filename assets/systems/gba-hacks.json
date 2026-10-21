@@ -48,6 +48,12 @@
       "unique_id": "gba-hacks.it.dbtecno.pizzaboygba",
       "description": "Supported extensions: gba, zip, 7z.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.sav"],
+        "dirs": {
+          "saves": "save"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n it.dbtecno.pizzaboygba/it.dbtecno.pizzaboygba.MainActivity -e rom_uri {file.path} --activity-clear-task --activity-clear-top --activity-no-history"
@@ -59,6 +65,12 @@
       "unique_id": "gba-hacks.it.dbtecno.pizzaboygbapro",
       "description": "Supported extensions: gba, zip, 7z.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.sav"],
+        "dirs": {
+          "saves": "save"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n it.dbtecno.pizzaboygbapro/it.dbtecno.pizzaboygbapro.MainActivity -e rom_uri {file.uri} --activity-clear-task --activity-clear-top --activity-no-history"
@@ -70,6 +82,10 @@
       "unique_id": "gba-hacks.com.sky.SkyEmu",
       "description": "Supported extensions: gba.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.sav"],
+        "states": ["*.state.raw", "*.state.png"]
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.sky.SkyEmu/.EnhancedNativeActivity -a android.intent.action.VIEW -d {file.uri} --activity-clear-task --activity-clear-top --activity-no-history"
@@ -81,6 +97,14 @@
       "unique_id": "gba-hacks.com.explusalpha.GbaEmu",
       "description": "Support extensions: agb, bin, cgb, dmg, gb, gba, gbc, gbz, sgb.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.sav"],
+        "states": ["*.sgm"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.GbaEmu/com.imagine.BaseActivity -a android.intent.action.VIEW -d \"{file.localuri}\" -t application/zip --activity-clear-task --activity-clear-top --activity-no-history"
@@ -92,6 +116,12 @@
       "unique_id": "gba-hacks.com.fastemulator.gbafree",
       "description": "Support extensions: agb, bin, cgb, dmg, gb, gba, gbc, gbz, sgb.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.sav"],
+        "dirs": {
+          "saves": "save"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.fastemulator.gbafree/com.fastemulator.gba.EmulatorActivity -a android.intent.action.VIEW -d {file.uri} --activity-clear-task --activity-clear-top --activity-no-history"
@@ -103,6 +133,12 @@
       "unique_id": "gba-hacks.com.fastemulator.gba",
       "description": "Support extensions: agb, bin, cgb, dmg, gb, gba, gbc, gbz, sgb.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.sav"],
+        "dirs": {
+          "saves": "save"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.fastemulator.gba/.EmulatorActivity -a android.intent.action.VIEW -d {file.uri} --activity-clear-task --activity-clear-top --activity-no-history"
@@ -114,6 +150,12 @@
       "unique_id": "gba-hacks.com.pixelrespawn.linkboy",
       "description": "Support extensions: bin, cgb, dmg, gb, gbc, gbs, rom, sgb.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.sav"],
+        "dirs": {
+          "saves": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.pixelrespawn.linkboy/.EmulatorActivity -a android.intent.action.VIEW -d {file.uri} --activity-clear-task --activity-clear-top --activity-no-history"

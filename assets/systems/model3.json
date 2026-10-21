@@ -59,6 +59,14 @@
       "unique_id": "model3.com.izzy2lost.super3",
       "description": "Supported extensions: zip.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.nv"],
+        "states": ["*.st[0-9]"],
+        "dirs": {
+          "saves": "NVRAM",
+          "states": "Saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.izzy2lost.super3/.MainActivity -d \"{file.uri}\""

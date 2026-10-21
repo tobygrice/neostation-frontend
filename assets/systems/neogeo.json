@@ -41,6 +41,14 @@
       "unique_id": "neogeo.com.explusalpha.NeoEmu",
       "description": "Supported extensions: zip, 7z.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.nv", "*.memcard"],
+        "states": ["*.sta"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.NeoEmu/com.imagine.BaseActivity -d \"{file.path}\" -t application/zip --activity-clear-task --activity-clear-top --activity-no-history"

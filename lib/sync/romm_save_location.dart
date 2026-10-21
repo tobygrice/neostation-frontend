@@ -176,9 +176,10 @@ final class StandaloneSaveLocation extends RommSaveLocation {
 
   /// Where a RomM Asset named [localName] goes: over the local file of the same
   /// kind and name when there is one, otherwise beside the game's other files
-  /// of that kind, otherwise beside the folder's other files with its
-  /// extension (another game's memory cards, say), otherwise at the folder
-  /// root. Null when the result would leave the folder.
+  /// of that kind, otherwise in the subfolder [patterns] names for that kind
+  /// when the folder has it, otherwise beside the folder's most files of that
+  /// kind (another game's memory cards, say), otherwise at the folder root.
+  /// Null when the result would leave the folder.
   Future<String?> targetFor(
     String localName, {
     required SaveFileKind kind,
@@ -190,21 +191,45 @@ final class StandaloneSaveLocation extends RommSaveLocation {
       if (path.basename(f.filePath) == localName) return f.filePath;
     }
     final dir = sameKind.isEmpty
-        ? await _dirOfExtension(path.extension(localName)) ?? root
+        ? await _declaredDir(kind) ??
+              await _dirOfKind(kind, path.extension(localName)) ??
+              root
         : path.dirname(sameKind.first.filePath);
     final target = safeJoin(dir, localName);
     if (target == null) return null;
     return path.isWithin(root, target) ? target : null;
   }
 
-  /// The directory in the folder holding the most files with [extension], or
-  /// null when none has one.
-  Future<String?> _dirOfExtension(String extension) async {
-    if (extension.isEmpty) return null;
-    final lower = extension.toLowerCase();
+  /// The subfolder [patterns] names for [kind], or null when it names none or
+  /// the folder has no such subfolder, as when the user chose that subfolder
+  /// itself as the Standalone Save Folder.
+  Future<String?> _declaredDir(SaveFileKind kind) async {
+    final declared = patterns.dirs[kind];
+    if (declared == null) return null;
+    final dir = safeJoin(root, declared);
+    if (dir == null || !await Directory(dir).exists()) return null;
+    return dir;
+  }
+
+  /// The directory in the folder holding the most files of [kind], or null
+  /// when none holds one.
+  ///
+  /// A file is of [kind] by [patterns] when they declare that kind, which
+  /// groups a state slot with the others whatever its number (`.ml3` beside
+  /// `.ml1`). Otherwise "of [kind]" says nothing, and a file counts only when
+  /// it has [extension].
+  Future<String?> _dirOfKind(SaveFileKind kind, String extension) async {
+    final bool Function(String filePath) isOfKind;
+    if (patterns.declares(kind)) {
+      isOfKind = (p) => patterns.classify(path.basename(p)) == kind;
+    } else {
+      if (extension.isEmpty) return null;
+      final lower = extension.toLowerCase();
+      isOfKind = (p) => path.extension(p).toLowerCase() == lower;
+    }
     final counts = <String, int>{};
     for (final p in await _allPaths) {
-      if (path.extension(p).toLowerCase() != lower) continue;
+      if (!isOfKind(p)) continue;
       final dir = path.dirname(p);
       counts[dir] = (counts[dir] ?? 0) + 1;
     }

@@ -52,6 +52,14 @@
       "unique_id": "msx.com.explusalpha.MsxEmu",
       "description": "Supported extensions: cas, col, dsk, fdi, m3u, mx1, mx2, ri, rom, sc, sg.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.sram"],
+        "states": ["*.sta"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.MsxEmu/com.imagine.BaseActivity -a android.intent.action.VIEW -d \"{file.path}\" -t application/zip --activity-clear-task --activity-clear-top --activity-no-history"

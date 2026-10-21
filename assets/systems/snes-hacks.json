@@ -55,6 +55,14 @@
       "unique_id": "snes-hacks.com.explusalpha.Snes9xPlus",
       "description": "Supported extensions: bml, bs, bsx, dx2, fig, gb, gbc, gd3, gd7, rom, sfc, smc, st, swc.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.srm", "*.rtc"],
+        "states": ["*.frz"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.Snes9xPlus/com.imagine.BaseActivity -a android.intent.action.VIEW -d \"{file.localuri}\" -t application/zip"

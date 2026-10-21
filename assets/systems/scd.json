@@ -55,6 +55,14 @@
       "unique_id": "scd.com.explusalpha.MdEmu",
       "description": "Support extensions: 32x, 68k, bin, bms, chd, cue, gen, gg, iso, m3u, md, mdx, pco, sg, sgd, smd, sms.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.srm", "*.brm"],
+        "states": ["*.gp"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.MdEmu/com.imagine.BaseActivity -a android.intent.action.VIEW -d \"{file.localuri}\""

@@ -57,6 +57,14 @@
       "unique_id": "dc.com.reicast.emulator",
       "description": "Supported extensions: 7z, bin, cdi, chd, cue, elf, gdi, lst, zip.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.nvmem", "*.nvmem2", "*.eeprom"],
+        "states": ["*.state"],
+        "dirs": {
+          "saves": "data",
+          "states": "data"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.reicast.emulator/.MainActivity -a android.intent.action.VIEW -d \"{file.uri}\""
@@ -68,6 +76,14 @@
       "unique_id": "dc.com.flycast.emulator",
       "description": "Supported extensions: 7z, bin, cdi, chd, cue, elf, gdi, lst, zip.",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.nvmem", "*.nvmem2", "*.eeprom", "*_vmu_save_*.bin"],
+        "states": ["*.state"],
+        "dirs": {
+          "saves": "data",
+          "states": "data"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.flycast.emulator/com.flycast.emulator.MainActivity -a android.intent.action.VIEW -d \"{file.uri}\"",

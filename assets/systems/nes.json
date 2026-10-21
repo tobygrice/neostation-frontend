@@ -46,6 +46,14 @@
       "unique_id": "nes.com.explusalpha.NesEmu",
       "description": "Support extensions: bin, fds, nes, nsf, qd, rom, unf, unif.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.sav"],
+        "states": ["*.fc[s0-9]"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.NesEmu/com.imagine.BaseActivity -a android.intent.action.VIEW -d \"{file.localuri}\" -t application/zip"

@@ -121,7 +121,7 @@ When **Use RomM for save sync** is on, RomM uses the same Standalone Save Folder
 Only games downloaded from or linked to RomM are synced. For each one, NeoStation syncs only where the emulator it would launch the game with keeps its saves: the game's own emulator if you chose one, otherwise the system's default.
 
 - **RetroArch:** RetroArch's save and state folders, as before.
-- **A standalone emulator with a configured folder:** that folder. A newer save from another device, or from RomM's browser player, replaces your local file in place, so the emulator loads it next time. A save this device has no copy of yet goes beside the game's other files of the same kind, otherwise beside the folder's other files with the same extension (another game's memory cards, for example), otherwise at the top of the folder. On a device where the emulator has saved nothing yet, select the exact folder it saves into rather than a parent. If files with the same name sit in different subfolders, only the most recently changed one syncs.
+- **A standalone emulator with a configured folder:** that folder. A newer save from another device, or from RomM's browser player, replaces your local file in place, so the emulator loads it next time. A save this device has no copy of yet goes beside the game's other files of the same kind. Otherwise it goes into the subfolder where the emulator keeps that kind, for emulators whose definition names one (DraStic's `backup` and `savestates`, for example). Otherwise it goes beside the folder's other files of that kind (another game's memory cards, for example), and otherwise at the top of the folder. For an emulator whose definition names no subfolders, on a device where it has saved nothing yet, select the exact folder it saves into rather than a parent. If files with the same name sit in different subfolders, only the most recently changed one syncs.
 - **A standalone emulator with no folder on this device:** nothing is synced, and the game shows the "emulator missing" status.
 
 Switching a game to another emulator stops syncing the old emulator's saves. They stay on RomM.
@@ -137,7 +137,7 @@ These are skipped on purpose:
 - Per-game memory cards that an emulator names by serial (`SLUS-00594_1.mcd`) or from its own game list, and saves kept as a generic file inside a folder named after the game. Neither matches the ROM's name.
 - The ROM itself, if the folder you choose also holds your ROMs.
 
-Some emulators' definitions say which of their files are saves and which are save states, and their save states go to RomM as states. Files left on RomM by earlier versions, such as a shared memory card attached to every PS2 game, are never downloaded. Delete them from the **Saves** tab if you no longer want them.
+Many emulators' definitions say which of their files are saves and which are save states. Their save states go to RomM as states, and files of theirs that are neither, such as per-game settings or cheats, stay on the device. Files left on RomM by earlier versions, such as a shared memory card attached to every PS2 game, are never downloaded. Delete them from the **Saves** tab if you no longer want them.
 
 ## Deleting a Cloud Save
 

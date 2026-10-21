@@ -232,6 +232,9 @@ class _RetroArchFolders {
 
 const _watermelon = 'ds.standalone.melonds.dual';
 const _drastic = 'ds.standalone.drastic';
+
+/// A standalone emulator whose definition declares no `save_files`.
+const _seedless = 'ds.standalone.Seedless';
 const _raMelon = 'ds.ra.melonds';
 
 GameModel _game(String romname, {String? emulator}) => GameModel(
@@ -328,6 +331,7 @@ void main() {
     await addEmulator(_raMelon, standalone: false, isDefault: true);
     await addEmulator(_watermelon, standalone: true);
     await addEmulator(_drastic, standalone: true);
+    await addEmulator(_seedless, standalone: true);
 
     tmp = await Directory.systemTemp.createTemp('romm_standalone');
     watermelonDir = Directory(p.join(tmp.path, 'watermelon'))..createSync();
@@ -539,7 +543,7 @@ void main() {
     });
 
     test('a file matching neither list stays local', () async {
-      write(watermelonDir, 'Game.sav', 'OTHER EMULATOR');
+      write(watermelonDir, 'Game.dsv', 'OTHER EMULATOR');
 
       await provider.syncGameSavesAfterClose(
         _game('Game.nds', emulator: _watermelon),
@@ -549,7 +553,7 @@ void main() {
     });
 
     test('remote assets are filtered by the same patterns', () async {
-      server.seed(1, 'Game.sav', 'NOT A WATERMELON SAVE'.codeUnits);
+      server.seed(1, 'Game.dsv', 'NOT A WATERMELON SAVE'.codeUnits);
       server.seed(1, 'Game.state', 'RETROARCH STATE'.codeUnits, isState: true);
       server.seed(1, 'Game.ml2', 'WATERMELON STATE'.codeUnits, isState: true);
 
@@ -564,15 +568,15 @@ void main() {
 
     test('an emulator that declares no patterns syncs every file as a save, '
         'and no states', () async {
-      final drasticDir = Directory(p.join(tmp.path, 'drastic'))..createSync();
-      await configureFolder(_drastic, drasticDir);
-      write(drasticDir, 'Game.dsv', 'SAVE');
-      write(drasticDir, 'Game_0.dss', 'DRASTIC STATE');
+      final seedlessDir = Directory(p.join(tmp.path, 'seedless'))..createSync();
+      await configureFolder(_seedless, seedlessDir);
+      write(seedlessDir, 'Game.dsv', 'SAVE');
+      write(seedlessDir, 'Game_0.dss', 'A STATE');
       server.seed(1, 'Game.state', 'RETROARCH STATE'.codeUnits, isState: true);
-      final drastic = _game('Game.nds', emulator: _drastic);
+      final seedless = _game('Game.nds', emulator: _seedless);
 
-      await provider.syncGameSavesBeforeLaunch(drastic);
-      await provider.syncGameSavesAfterClose(drastic);
+      await provider.syncGameSavesBeforeLaunch(seedless);
+      await provider.syncGameSavesAfterClose(seedless);
 
       expect(
         server.uploads.map((u) => '$u'),
@@ -581,7 +585,10 @@ void main() {
           'save 1/Game_0.dss @autosave',
         ]),
       );
-      expect(File(p.join(drasticDir.path, 'Game.state')).existsSync(), isFalse);
+      expect(
+        File(p.join(seedlessDir.path, 'Game.state')).existsSync(),
+        isFalse,
+      );
     });
 
     test(
@@ -600,14 +607,14 @@ void main() {
   });
 
   group('which files count', () {
-    // DraStic declares no patterns, so every file is a save and the name rule
+    // Seedless declares no patterns, so every file is a save and the name rule
     // alone decides.
-    late Directory drasticDir;
-    final drastic = _game('Game.nds', emulator: _drastic);
+    late Directory seedlessDir;
+    final seedless = _game('Game.nds', emulator: _seedless);
 
     setUp(() async {
-      drasticDir = Directory(p.join(tmp.path, 'drastic'))..createSync();
-      await configureFolder(_drastic, drasticDir);
+      seedlessDir = Directory(p.join(tmp.path, 'seedless'))..createSync();
+      await configureFolder(_seedless, seedlessDir);
     });
 
     List<String> uploadedNames() => [for (final u in server.uploads) u.name];
@@ -626,10 +633,10 @@ void main() {
           'Game_Hack.srm',
           'Game',
         ]) {
-          write(drasticDir, name, name);
+          write(seedlessDir, name, name);
         }
 
-        await provider.syncGameSavesAfterClose(drastic);
+        await provider.syncGameSavesAfterClose(seedless);
 
         expect(
           uploadedNames(),
@@ -648,15 +655,15 @@ void main() {
       'a file inside a game-named folder counts by its own name only',
       () async {
         // Folder Saves: generic names inside a folder per game.
-        write(Directory(p.join(drasticDir.path, 'Game')), 'save.dat', 'X');
+        write(Directory(p.join(seedlessDir.path, 'Game')), 'save.dat', 'X');
         write(
-          Directory(p.join(drasticDir.path, 'SAVEDATA', 'ULUS10041')),
+          Directory(p.join(seedlessDir.path, 'SAVEDATA', 'ULUS10041')),
           'PARAM.SFO',
           'X',
         );
-        write(Directory(p.join(drasticDir.path, 'Game')), 'Game.dsv', 'MINE');
+        write(Directory(p.join(seedlessDir.path, 'Game')), 'Game.dsv', 'MINE');
 
-        await provider.syncGameSavesAfterClose(drastic);
+        await provider.syncGameSavesAfterClose(seedless);
 
         expect(uploadedNames(), ['Game.dsv']);
       },
@@ -665,11 +672,11 @@ void main() {
     test(
       'the ROM itself never goes up, from a folder shared with the ROMs',
       () async {
-        write(drasticDir, 'Game.nds', 'ROM');
-        write(drasticDir, 'Game.zip', 'ROM');
-        write(drasticDir, 'Game.dsv', 'SAVE');
+        write(seedlessDir, 'Game.nds', 'ROM');
+        write(seedlessDir, 'Game.zip', 'ROM');
+        write(seedlessDir, 'Game.dsv', 'SAVE');
 
-        await provider.syncGameSavesAfterClose(drastic);
+        await provider.syncGameSavesAfterClose(seedless);
 
         expect(uploadedNames(), ['Game.dsv']);
       },
@@ -680,10 +687,10 @@ void main() {
       () async {
         // `bin` is a DS ROM extension, as it is for Dreamcast, whose Flycast
         // names per-game VMUs this way.
-        write(drasticDir, 'Game.bin', 'ROM');
-        write(drasticDir, 'Game.A1.bin', 'PER-GAME CARD');
+        write(seedlessDir, 'Game.bin', 'ROM');
+        write(seedlessDir, 'Game.A1.bin', 'PER-GAME CARD');
 
-        await provider.syncGameSavesAfterClose(drastic);
+        await provider.syncGameSavesAfterClose(seedless);
 
         expect(uploadedNames(), ['Game.A1.bin']);
       },
@@ -694,9 +701,9 @@ void main() {
       server.seed(1, 'Game.nds', 'A ROM'.codeUnits);
       server.seed(1, 'Game [2026-10-20_10-00-00].dsv', 'MINE'.codeUnits);
 
-      await provider.syncGameSavesBeforeLaunch(drastic);
+      await provider.syncGameSavesBeforeLaunch(seedless);
 
-      expect(drasticDir.listSync().map((e) => p.basename(e.path)), [
+      expect(seedlessDir.listSync().map((e) => p.basename(e.path)), [
         'Game.dsv',
       ]);
     });
@@ -908,6 +915,88 @@ void main() {
         File(p.join(watermelonDir.path, 'Game.srm')).existsSync(),
         isFalse,
       );
+    });
+
+    test('a state lands beside the folder\'s other states, whatever its slot '
+        'number', () async {
+      write(Directory(p.join(watermelonDir.path, 'saves')), 'Other.srm', 'S');
+      final states = Directory(p.join(watermelonDir.path, 'states'));
+      write(states, 'Other.ml1', 'ANOTHER GAME\'S STATE');
+      server.seed(1, 'Game.ml3', 'REMOTE'.codeUnits, isState: true);
+
+      await provider.syncGameSavesBeforeLaunch(
+        _game('Game.nds', emulator: _watermelon),
+      );
+
+      expect(
+        File(p.join(states.path, 'Game.ml3')).readAsStringSync(),
+        'REMOTE',
+      );
+    });
+
+    test('lands in the subfolder the emulator\'s definition names for its '
+        'kind, even with no file there yet', () async {
+      final drasticDir = Directory(p.join(tmp.path, 'DraStic'));
+      final backup = Directory(p.join(drasticDir.path, 'backup'))
+        ..createSync(recursive: true);
+      final savestates = Directory(p.join(drasticDir.path, 'savestates'))
+        ..createSync();
+      // More files of the kind elsewhere do not outweigh the named subfolder.
+      final other = Directory(p.join(drasticDir.path, 'other'));
+      write(other, 'A.dsv', 'A');
+      write(other, 'B.dsv', 'B');
+      await configureFolder(_drastic, drasticDir);
+      server.seed(1, 'Game.dsv', 'REMOTE SAVE'.codeUnits);
+      server.seed(1, 'Game_0.dss', 'REMOTE STATE'.codeUnits, isState: true);
+
+      await provider.syncGameSavesBeforeLaunch(
+        _game('Game.nds', emulator: _drastic),
+      );
+
+      expect(
+        File(p.join(backup.path, 'Game.dsv')).readAsStringSync(),
+        'REMOTE SAVE',
+      );
+      expect(
+        File(p.join(savestates.path, 'Game_0.dss')).readAsStringSync(),
+        'REMOTE STATE',
+      );
+    });
+
+    test('a named subfolder the folder lacks is not made: the folder chosen '
+        'may already be it', () async {
+      final backup = Directory(p.join(tmp.path, 'DraStic', 'backup'))
+        ..createSync(recursive: true);
+      await configureFolder(_drastic, backup);
+      server.seed(1, 'Game.dsv', 'REMOTE'.codeUnits);
+
+      await provider.syncGameSavesBeforeLaunch(
+        _game('Game.nds', emulator: _drastic),
+      );
+
+      expect(
+        File(p.join(backup.path, 'Game.dsv')).readAsStringSync(),
+        'REMOTE',
+      );
+      expect(Directory(p.join(backup.path, 'backup')).existsSync(), isFalse);
+    });
+
+    test('for an emulator that declares nothing, lands beside the files with '
+        'its extension', () async {
+      final seedlessDir = Directory(p.join(tmp.path, 'seedless'))..createSync();
+      final cards = Directory(p.join(seedlessDir.path, 'cards'));
+      write(cards, 'Other.dsv', 'ANOTHER GAME');
+      final misc = Directory(p.join(seedlessDir.path, 'misc'));
+      write(misc, 'a.cfg', 'A');
+      write(misc, 'b.cfg', 'B');
+      await configureFolder(_seedless, seedlessDir);
+      server.seed(1, 'Game.dsv', 'REMOTE'.codeUnits);
+
+      await provider.syncGameSavesBeforeLaunch(
+        _game('Game.nds', emulator: _seedless),
+      );
+
+      expect(File(p.join(cards.path, 'Game.dsv')).readAsStringSync(), 'REMOTE');
     });
   });
 

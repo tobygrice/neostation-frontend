@@ -90,6 +90,14 @@
       "unique_id": "sat.com.explusalpha.SaturnEmu",
       "description": "Supported extensions: ccd, chd, cue, m3u, toc.",
       "is_retroachievements_compatible": false,
+      "save_files": {
+        "saves": ["*.bkr", "*.bcr", "*.smpc", "*.seep", "*.arp"],
+        "states": ["*.nc?"],
+        "dirs": {
+          "saves": "saves",
+          "states": "saves"
+        }
+      },
       "platforms": {
         "android": {
           "launch_arguments": "-n com.explusalpha.SaturnEmu/com.imagine.BaseActivity -a android.intent.action.VIEW -d \"{file.localuri}\" --activity-clear-task --activity-clear-top --activity-no-history"

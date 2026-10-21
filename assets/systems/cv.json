@@ -148,6 +148,14 @@
       "unique_id": "cv.ramek",
       "description": "Supported extensions: col, cv, bin, rom, zip",
       "is_retroachievements_compatible": true,
+      "save_files": {
+        "saves": ["*.sav"],
+        "states": ["*.s[0-9][0-9]"],
+        "dirs": {
+          "saves": "Saves",
+          "states": "Saves"
+        }
+      },
       "platforms": {
         "windows": {
           "executable": "RAmeka.exe",
